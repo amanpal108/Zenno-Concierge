@@ -83,9 +83,9 @@ export default {
         },
       },
       fontFamily: {
-        sans: ["var(--font-sans)"],
+        sans: ["Inter", "SF Pro Display", "system-ui", "sans-serif"],
         serif: ["var(--font-serif)"],
-        mono: ["var(--font-mono)"],
+        mono: ["SF Mono", "Menlo", "Monaco", "Courier New", "monospace"],
       },
       keyframes: {
         "accordion-down": {
