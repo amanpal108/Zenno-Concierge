@@ -1,0 +1,75 @@
+You are tasked with building a complete MVP application called "Zenno Concierge" based on the detailed specifications provided. This is a complex full-stack application that integrates multiple real APIs and services.
+
+<project_requirements>
+{{PROJECT_REQUIREMENTS}}
+</project_requirements>
+
+You must build this application exactly as specified in the PROJECT_REQUIREMENTS above. This is a sophisticated AI concierge system that helps users in India find and purchase Banarasi sarees through an end-to-end automated process involving real API integrations.
+
+## Key Implementation Requirements:
+
+**Critical Constraints:**
+- All Locus wallet transactions must be REAL using the provided API key and wallet ID
+- All Twilio phone calls must be REAL outbound calls to the specified vendor number
+- All Stripe payments must use the REAL test API (test mode but actual API calls)
+- Anthropic Agent SDK must be used for all AI reasoning and orchestration
+- ElevenLabs must be used for English text-to-speech generation
+- Only Google Places results may be mocked if the Maps API key is missing
+- The application must fail fast at startup if any mandatory API keys are missing
+
+**Architecture Overview:**
+- Backend: Python + FastAPI with proper CORS configuration
+- Frontend: React + TypeScript + Vite + TailwindCSS  
+- AI Agent: Anthropic Agent SDK for reasoning and orchestration
+- Voice: ElevenLabs TTS for English responses to users
+- Telephony: Twilio for real outbound calls with Hindi negotiation
+- Payments: Locus (real USDC transactions) → Stripe (real test mode payouts)
+- Maps: Google Places API (with fallback mock data)
+
+**Implementation Steps:**
+
+1. **Project Structure**: Create the exact folder structure specified, including all routes, services, and components.
+
+2. **Configuration**: Implement config.py with proper environment variable validation and fail-fast behavior for missing mandatory keys.
+
+3. **Backend Services**: Implement each service module exactly as specified:
+   - zenno_agent.py: Anthropic Agent SDK integration
+   - elevenlabs_tts.py: Real ElevenLabs API calls
+   - twilio_client.py: Real Twilio outbound calling
+   - locus_wallet.py: Real USDC transactions on Base
+   - stripe_payments.py: Real Stripe test API payouts
+   - google_places.py: Places API with mock fallback
+
+4. **API Routes**: Implement all specified routes with proper request/response models:
+   - /api/chat: User conversation handling
+   - /api/vendors/*: Vendor search and selection
+   - /api/calls/*: Twilio call management and webhooks
+   - /api/payments/*: Payment processing
+   - /api/tts/*: Text-to-speech generation
+
+5. **Frontend Implementation**: Build React components with proper state management for the complete user flow from initial chat through payment completion.
+
+6. **Integration Flow**: Ensure the complete end-to-end flow works:
+   - User chats with Zenno in English
+   - Zenno finds vendors and gets user selection
+   - Zenno makes real Twilio call and negotiates in Hindi
+   - Zenno processes real Locus USDC payment
+   - Zenno creates real Stripe test payout
+   - User receives complete summary with transaction details
+
+**Error Handling:**
+- Implement proper error handling for all API integrations
+- Provide clear error messages when real API calls fail
+- Do not mock or simulate failures - let real API errors propagate appropriately
+
+**Output Requirements:**
+Provide the complete, working codebase including:
+- All backend Python files with proper imports and error handling
+- All frontend React/TypeScript components
+- Configuration files (requirements.txt, package.json, etc.)
+- README.md with setup instructions and environment variable documentation
+- Proper project structure as specified
+
+The application must be production-ready code that can be deployed and run successfully when provided with valid API keys for all the required services.
+
+Remember: This is not a demo or prototype - it must make real API calls to Locus, Twilio, Stripe, Anthropic, and ElevenLabs as specified. Only Google Places may be mocked if the API key is unavailable.
