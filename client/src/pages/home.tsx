@@ -58,23 +58,42 @@ export default function Home() {
         message,
         sessionId: sessionId ?? undefined,
       };
-      return await apiRequest("POST", "/api/chat", request);
+      const response = await apiRequest("POST", "/api/chat", request);
+      return await response.json();
     },
     onSuccess: async (data) => {
+      console.log("Chat response received:", data);
+      
+      // Ensure we have a sessionId
+      if (!data.sessionId) {
+        console.error("No sessionId in response:", data);
+        toast({
+          title: "Error",
+          description: "Failed to create session. Please try again.",
+          variant: "destructive",
+        });
+        return;
+      }
+      
       // Set sessionId first if it's a new session
       const isNewSession = !sessionId;
       if (isNewSession) {
+        console.log("Setting new sessionId:", data.sessionId);
         setSessionId(data.sessionId);
       }
       
       // Immediately fetch the full session to get all messages
       try {
+        console.log("Fetching session:", data.sessionId);
         const response = await fetch(`/api/session/${data.sessionId}`);
         if (response.ok) {
           const freshSession = await response.json();
+          console.log("Session fetched:", freshSession);
           setMessages(freshSession.messages || []);
           setVendors(freshSession.vendors || []);
           setSelectedVendor(freshSession.selectedVendor);
+        } else {
+          console.error("Failed to fetch session, status:", response.status);
         }
       } catch (error) {
         console.error("Failed to fetch session after message:", error);
@@ -99,18 +118,20 @@ export default function Home() {
   const selectVendorMutation = useMutation({
     mutationFn: async (vendor: Vendor) => {
       if (!sessionId) throw new Error("No active session");
-      const result = await apiRequest("POST", "/api/vendors/select", {
+      const response = await apiRequest("POST", "/api/vendors/select", {
         sessionId,
         vendorId: vendor.id,
       });
+      const result = await response.json();
       
       // Automatically initiate call after vendor selection
       try {
-        await apiRequest("POST", "/api/calls/initiate", {
+        const callResponse = await apiRequest("POST", "/api/calls/initiate", {
           sessionId,
           vendorId: vendor.id,
           userBudget: 10000, // Default budget ₹10,000
         });
+        await callResponse.json();
       } catch (callError) {
         console.error("Call initiation failed:", callError);
       }
@@ -144,11 +165,12 @@ export default function Home() {
       // Auto-initiate payment
       const processPayment = async () => {
         try {
-          await apiRequest("POST", "/api/payments/process", {
+          const response = await apiRequest("POST", "/api/payments/process", {
             sessionId: session.id,
             amount: session.currentCall!.negotiatedPrice!,
             vendorPhone: session.selectedVendor!.phone,
           });
+          await response.json();
           queryClient.invalidateQueries({ queryKey: ["/api/session", sessionId] });
           toast({
             title: "Payment Processing",

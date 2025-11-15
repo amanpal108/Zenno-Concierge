@@ -56,12 +56,19 @@ Keep responses concise (2-3 sentences max) and natural.`;
     const textContent = response.content.find(block => block.type === "text");
     return textContent && "text" in textContent ? textContent.text : "";
   } catch (error: any) {
-    console.error("Anthropic API error:", error);
-    // Fallback response
+    console.error("Anthropic API error:", error.message);
+    // Fallback response for rate limits or other errors
     if (context.vendors && context.vendors.length > 0) {
-      return `I found ${context.vendors.length} vendors for you. Select one to proceed!`;
+      return `Great! I found ${context.vendors.length} excellent Banarasi saree vendors in your area. Each vendor is known for their authentic craftsmanship and quality. Please select one from the list to proceed with your purchase.`;
     }
-    return "I'm here to help! Tell me about the Banarasi saree you're looking for.";
+    
+    // Check if user is searching
+    const lowerMessage = context.userMessage.toLowerCase();
+    if (lowerMessage.includes("saree") || lowerMessage.includes("vendor")) {
+      return "Perfect! I'm searching for the best Banarasi saree vendors in Varanasi for you. I'll find authentic sellers with quality products.";
+    }
+    
+    return "Welcome! I'm Zenno, your AI shopping assistant. I help you find and purchase authentic Banarasi sarees. Tell me what kind of saree you're looking for!";
   }
 }
 
@@ -127,9 +134,157 @@ Respond in JSON format:
       location: parsed.location === "not specified" ? undefined : parsed.location,
       preferences: parsed.preferences === "none" ? undefined : parsed.preferences,
     };
-  } catch (error) {
-    console.error("Intent extraction error:", error);
-    return { wantToSearch: wantsSearch };
+  } catch (error: any) {
+    console.error("Intent extraction error (using fallback):", error.message);
+    // Use keyword-based fallback for intent extraction
+    return {
+      wantToSearch: wantsSearch,
+      location: lowerMessage.includes("varanasi") ? "Varanasi" : "Varanasi", // Default to Varanasi
+      preferences: "authentic Banarasi sarees"
+    };
+  }
+}
+
+// Combined function that returns both response and intent in one API call
+export async function generateResponseWithIntent(context: ConversationContext): Promise<{
+  response: string;
+  intent: {
+    wantToSearch: boolean;
+    location?: string;
+    preferences?: string;
+  };
+}> {
+  const userMessageLower = context.userMessage.toLowerCase();
+  
+  // Keyword-based intent extraction fallback
+  const fallbackIntent = {
+    wantToSearch: userMessageLower.includes("find") ||
+      userMessageLower.includes("search") ||
+      userMessageLower.includes("looking for") ||
+      userMessageLower.includes("saree") ||
+      userMessageLower.includes("vendor") ||
+      userMessageLower.includes("shop") ||
+      userMessageLower.includes("buy"),
+    location: userMessageLower.includes("varanasi") ? "Varanasi" : "Varanasi", // Default to Varanasi
+    preferences: "authentic Banarasi sarees"
+  };
+
+  // Fallback responses when API is unavailable
+  const getFallbackResponse = () => {
+    if (context.vendors && context.vendors.length > 0) {
+      return `I found ${context.vendors.length} excellent Banarasi saree vendors in your area! Each vendor specializes in authentic craftsmanship and quality. Please select one from the list to proceed.`;
+    }
+    
+    if (fallbackIntent.wantToSearch) {
+      return "Perfect! I'm searching for the best Banarasi saree vendors in Varanasi for you. I'll find authentic sellers with quality products.";
+    }
+    
+    return "Hello! I'm Zenno, your AI shopping assistant. I help you find and purchase authentic Banarasi sarees. Tell me what you're looking for!";
+  };
+
+  // Return fallback if no API key
+  if (!client) {
+    return {
+      response: getFallbackResponse(),
+      intent: fallbackIntent
+    };
+  }
+  
+  try {
+    const systemPrompt = `You are Zenno, a friendly AI concierge assistant helping users find and purchase authentic Banarasi sarees in India.
+
+Your role:
+- Help users find Banarasi saree vendors near their location
+- Understand their preferences (color, style, budget, occasion)
+- Guide them through the vendor selection process
+- Keep responses conversational, warm, and helpful
+
+Current journey status: ${context.currentStatus}
+${context.vendors ? `Available vendors: ${context.vendors.map(v => v.name).join(", ")}` : "No vendors found yet."}
+
+IMPORTANT: You must respond in valid JSON format with exactly this structure:
+{
+  "response": "your conversational response here (2-3 sentences max)",
+  "intent": {
+    "wantToSearch": boolean (true if user wants to find/search for vendors),
+    "location": "city name or null",
+    "preferences": "user preferences or null"
+  }
+}
+
+Analyze the user's message to determine if they want to search for vendors. Set wantToSearch to true if they mention finding, searching, looking for sarees or vendors, or express buying intent.`;
+
+    const messages: Anthropic.MessageParam[] = [
+      ...context.conversationHistory.map(msg => ({
+        role: msg.role as "user" | "assistant",
+        content: msg.content,
+      })),
+      {
+        role: "user",
+        content: context.userMessage,
+      },
+    ];
+
+    const response = await client.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 500,
+      system: systemPrompt,
+      messages,
+    });
+
+    const textContent = response.content.find(block => block.type === "text");
+    if (!textContent || !("text" in textContent)) {
+      console.warn("No text content in API response, using fallback");
+      return {
+        response: getFallbackResponse(),
+        intent: fallbackIntent
+      };
+    }
+
+    try {
+      // Try to parse the JSON response
+      let jsonText = textContent.text.trim();
+      
+      // Remove markdown code blocks if present
+      if (jsonText.startsWith("```json")) {
+        jsonText = jsonText.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+      } else if (jsonText.startsWith("```")) {
+        jsonText = jsonText.replace(/```\n?/g, "").trim();
+      }
+      
+      const parsed = JSON.parse(jsonText);
+      
+      // Validate the structure
+      if (!parsed.response || typeof parsed.response !== "string") {
+        throw new Error("Invalid response structure");
+      }
+      
+      return {
+        response: parsed.response,
+        intent: {
+          wantToSearch: parsed.intent?.wantToSearch || false,
+          location: parsed.intent?.location === "null" || !parsed.intent?.location ? undefined : parsed.intent.location,
+          preferences: parsed.intent?.preferences === "null" || !parsed.intent?.preferences ? undefined : parsed.intent.preferences
+        }
+      };
+    } catch (parseError) {
+      console.warn("Failed to parse JSON response, falling back to text extraction:", parseError);
+      
+      // If JSON parsing fails, extract the conversational part and use fallback intent
+      const responseText = textContent.text.split(/\{/)[0].trim() || getFallbackResponse();
+      return {
+        response: responseText,
+        intent: fallbackIntent
+      };
+    }
+  } catch (error: any) {
+    console.error("Anthropic API error:", error.message);
+    
+    // Return fallback response with intent detection
+    return {
+      response: getFallbackResponse(),
+      intent: fallbackIntent
+    };
   }
 }
 

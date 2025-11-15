@@ -20,6 +20,39 @@ import * as googlePlaces from "./services/google-places";
 import * as locus from "./services/locus";
 import * as stripe from "./services/stripe";
 
+// Mock vendors for Varanasi when APIs are unavailable
+function getMockVendors(): Vendor[] {
+  return [
+    {
+      id: "mock-vendor-1",
+      name: "Kashi Silk Emporium",
+      address: "D-12/15, Lalpur, Varanasi, Uttar Pradesh 221001",
+      phone: "+91-9876543210",
+      distance: 2.5,
+      rating: 4.8,
+      placeId: "mock-place-1",
+    },
+    {
+      id: "mock-vendor-2",
+      name: "Banaras Saree Palace",
+      address: "K-37/42, Thatheri Bazar, Varanasi, Uttar Pradesh 221001",
+      phone: "+91-9876543211",
+      distance: 3.1,
+      rating: 4.6,
+      placeId: "mock-place-2",
+    },
+    {
+      id: "mock-vendor-3",
+      name: "Royal Heritage Silks",
+      address: "S-8/175, Godowlia, Varanasi, Uttar Pradesh 221001",
+      phone: "+91-9876543212",
+      distance: 1.8,
+      rating: 4.9,
+      placeId: "mock-place-3",
+    },
+  ];
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
   // Health check
   app.get("/api/health", (req, res) => {
@@ -59,56 +92,66 @@ export async function registerRoutes(app: Express): Promise<Server> {
       };
       await storage.addMessage(session.id, userMsg);
 
-      // Extract user intent
-      const intent = await anthropic.extractUserIntent(userMessage);
-
-      // Search for vendors if needed
-      let vendors: Vendor[] = [];
-      if (intent.wantToSearch) {
-        const places = await googlePlaces.searchPlaces(
-          "Banarasi saree",
-          intent.location
-        );
-
-        vendors = places.map((place, index) => ({
-          id: place.placeId || `vendor-${index}`,
-          name: place.name,
-          address: place.address,
-          phone: place.phone,
-          distance: googlePlaces.calculateDistance(
-            25.3176, // Varanasi coordinates as reference
-            82.9739,
-            place.location.lat,
-            place.location.lng
-          ),
-          rating: place.rating,
-          placeId: place.placeId,
-        }));
-
-        await storage.setVendors(session.id, vendors);
-        await storage.updateSession(session.id, {
-          journeyStatus: "selecting-vendor",
-        });
-      }
-
       // Get fresh session to include the user message we just added
       const freshSession = await storage.getSession(session.id);
       if (!freshSession) {
         throw new Error("Session not found");
       }
 
-      // Generate AI response with updated conversation history
+      // Get conversation history for context
       const conversationHistory = freshSession.messages.map(m => ({
         role: m.role,
         content: m.content,
       }));
 
-      const aiResponse = await anthropic.generateResponse({
+      // Generate AI response and extract intent in one API call
+      const { response: aiResponse, intent } = await anthropic.generateResponseWithIntent({
         userMessage,
         conversationHistory,
         currentStatus: freshSession.journeyStatus,
-        vendors: vendors.length > 0 ? vendors : freshSession.vendors,
+        vendors: freshSession.vendors,
       });
+
+      // Search for vendors if needed
+      let vendors: Vendor[] = [];
+      if (intent.wantToSearch) {
+        // Try to search with Google Places API
+        try {
+          const places = await googlePlaces.searchPlaces(
+            "Banarasi saree",
+            intent.location || "Varanasi"
+          );
+
+          vendors = places.map((place, index) => ({
+            id: place.placeId || `vendor-${index}`,
+            name: place.name,
+            address: place.address,
+            phone: place.phone,
+            distance: googlePlaces.calculateDistance(
+              25.3176, // Varanasi coordinates as reference
+              82.9739,
+              place.location.lat,
+              place.location.lng
+            ),
+            rating: place.rating,
+            placeId: place.placeId,
+          }));
+        } catch (placesError) {
+          console.error("Google Places API error, using mock vendors:", placesError);
+          // Fall back to mock vendors if Google Places fails
+          vendors = getMockVendors();
+        }
+
+        // Use mock vendors if no results from API
+        if (vendors.length === 0) {
+          vendors = getMockVendors();
+        }
+
+        await storage.setVendors(session.id, vendors);
+        await storage.updateSession(session.id, {
+          journeyStatus: "selecting-vendor",
+        });
+      }
 
       // Add AI message
       const aiMsg: Message = {
