@@ -61,11 +61,10 @@ export default function Home() {
       return await apiRequest("POST", "/api/chat", request);
     },
     onSuccess: async (data) => {
-      if (!sessionId) {
+      // Set sessionId first if it's a new session
+      const isNewSession = !sessionId;
+      if (isNewSession) {
         setSessionId(data.sessionId);
-      }
-      if (data.vendors) {
-        setVendors(data.vendors);
       }
       
       // Immediately fetch the full session to get all messages
@@ -75,13 +74,17 @@ export default function Home() {
           const freshSession = await response.json();
           setMessages(freshSession.messages || []);
           setVendors(freshSession.vendors || []);
+          setSelectedVendor(freshSession.selectedVendor);
         }
       } catch (error) {
         console.error("Failed to fetch session after message:", error);
       }
       
-      // Also invalidate query cache for subsequent polls
-      queryClient.invalidateQueries({ queryKey: ["/api/session", data.sessionId] });
+      // Only invalidate query cache if session already exists (for subsequent polls)
+      // For new sessions, the query will start automatically when sessionId is set
+      if (!isNewSession) {
+        queryClient.invalidateQueries({ queryKey: ["/api/session", data.sessionId] });
+      }
     },
     onError: (error: Error) => {
       toast({
