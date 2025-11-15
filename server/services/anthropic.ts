@@ -113,7 +113,15 @@ Respond in JSON format:
       return { wantToSearch: wantsSearch };
     }
 
-    const parsed = JSON.parse(textContent.text);
+    // Strip markdown code blocks if present
+    let jsonText = textContent.text.trim();
+    if (jsonText.startsWith("```json")) {
+      jsonText = jsonText.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+    } else if (jsonText.startsWith("```")) {
+      jsonText = jsonText.replace(/```\n?/g, "").trim();
+    }
+
+    const parsed = JSON.parse(jsonText);
     return {
       wantToSearch: parsed.wantToSearch,
       location: parsed.location === "not specified" ? undefined : parsed.location,

@@ -60,14 +60,27 @@ export default function Home() {
       };
       return await apiRequest("POST", "/api/chat", request);
     },
-    onSuccess: (data) => {
+    onSuccess: async (data) => {
       if (!sessionId) {
         setSessionId(data.sessionId);
       }
       if (data.vendors) {
         setVendors(data.vendors);
       }
-      // Immediately invalidate to fetch updated session with new messages
+      
+      // Immediately fetch the full session to get all messages
+      try {
+        const response = await fetch(`/api/session/${data.sessionId}`);
+        if (response.ok) {
+          const freshSession = await response.json();
+          setMessages(freshSession.messages || []);
+          setVendors(freshSession.vendors || []);
+        }
+      } catch (error) {
+        console.error("Failed to fetch session after message:", error);
+      }
+      
+      // Also invalidate query cache for subsequent polls
       queryClient.invalidateQueries({ queryKey: ["/api/session", data.sessionId] });
     },
     onError: (error: Error) => {
