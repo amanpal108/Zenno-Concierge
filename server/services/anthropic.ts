@@ -3,6 +3,155 @@ import Anthropic from "@anthropic-ai/sdk";
 const API_KEY = process.env.ANTHROPIC_API_KEY;
 const client = API_KEY ? new Anthropic({ apiKey: API_KEY }) : null;
 
+/**
+ * RateLimiter class for Anthropic API
+ * Enforces max 4 requests per minute with sliding window approach
+ * Implements exponential backoff for 429 errors and request queueing
+ */
+class RateLimiter {
+  private requestTimestamps: number[] = [];
+  private readonly maxRequests = 4; // Safety margin from 5 requests/minute
+  private readonly windowMs = 60000; // 1 minute window
+  private readonly queueTimeoutMs = 30000; // 30 second timeout for queued requests
+  private readonly backoffDelays = [1000, 2000, 4000]; // 1s, 2s, 4s exponential backoff
+  private retryCount = 0;
+  private requestQueue: Array<{
+    execute: () => Promise<any>;
+    resolve: (value: any) => void;
+    reject: (error: any) => void;
+    timestamp: number;
+  }> = [];
+  private isProcessingQueue = false;
+
+  /**
+   * Throttle function that wraps API calls with rate limiting
+   */
+  async throttle<T>(fn: () => Promise<T>): Promise<T> {
+    // Clean old timestamps outside the sliding window
+    const now = Date.now();
+    this.requestTimestamps = this.requestTimestamps.filter(
+      timestamp => now - timestamp < this.windowMs
+    );
+
+    // Check if we can make a request immediately
+    if (this.requestTimestamps.length < this.maxRequests) {
+      return this.executeWithRetry(fn);
+    }
+
+    // Otherwise, queue the request
+    return new Promise<T>((resolve, reject) => {
+      this.requestQueue.push({
+        execute: fn,
+        resolve,
+        reject,
+        timestamp: now
+      });
+
+      // Process queue if not already processing
+      if (!this.isProcessingQueue) {
+        this.processQueue();
+      }
+
+      // Set timeout for this specific request
+      setTimeout(() => {
+        const index = this.requestQueue.findIndex(
+          item => item.resolve === resolve
+        );
+        if (index !== -1) {
+          this.requestQueue.splice(index, 1);
+          reject(new Error("Request timeout: Queued for over 30 seconds"));
+        }
+      }, this.queueTimeoutMs);
+    });
+  }
+
+  /**
+   * Process queued requests when rate limit allows
+   */
+  private async processQueue() {
+    if (this.isProcessingQueue || this.requestQueue.length === 0) {
+      return;
+    }
+
+    this.isProcessingQueue = true;
+
+    while (this.requestQueue.length > 0) {
+      const now = Date.now();
+      
+      // Clean old timestamps
+      this.requestTimestamps = this.requestTimestamps.filter(
+        timestamp => now - timestamp < this.windowMs
+      );
+
+      if (this.requestTimestamps.length < this.maxRequests) {
+        const request = this.requestQueue.shift();
+        if (request) {
+          // Check if request has timed out
+          if (now - request.timestamp > this.queueTimeoutMs) {
+            request.reject(new Error("Request timeout: Queued for over 30 seconds"));
+            continue;
+          }
+
+          try {
+            const result = await this.executeWithRetry(request.execute);
+            request.resolve(result);
+          } catch (error) {
+            request.reject(error);
+          }
+        }
+      } else {
+        // Calculate time until next available slot
+        const oldestTimestamp = this.requestTimestamps[0];
+        const waitTime = Math.max(0, this.windowMs - (now - oldestTimestamp) + 100);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+      }
+    }
+
+    this.isProcessingQueue = false;
+  }
+
+  /**
+   * Execute request with exponential backoff for 429 errors
+   */
+  private async executeWithRetry<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      // Record the request timestamp
+      this.requestTimestamps.push(Date.now());
+      
+      const result = await fn();
+      
+      // Reset retry count on success
+      this.retryCount = 0;
+      
+      return result;
+    } catch (error: any) {
+      // Check if it's a rate limit error (429)
+      if (error?.status === 429 || error?.message?.includes("rate_limit")) {
+        if (this.retryCount < this.backoffDelays.length) {
+          const delay = this.backoffDelays[this.retryCount];
+          this.retryCount++;
+          
+          console.warn(`Rate limit hit, retrying after ${delay}ms (attempt ${this.retryCount}/${this.backoffDelays.length})`);
+          
+          // Wait for backoff delay
+          await new Promise(resolve => setTimeout(resolve, delay));
+          
+          // Remove the failed request timestamp and retry
+          this.requestTimestamps.pop();
+          return this.executeWithRetry(fn);
+        }
+      }
+      
+      // Reset retry count on other errors
+      this.retryCount = 0;
+      throw error;
+    }
+  }
+}
+
+// Create a single rate limiter instance for all Anthropic API calls
+const rateLimiter = new RateLimiter();
+
 export interface ConversationContext {
   userMessage: string;
   conversationHistory: Array<{ role: "user" | "assistant"; content: string }>;
@@ -46,12 +195,14 @@ Keep responses concise (2-3 sentences max) and natural.`;
       },
     ];
 
-    const response = await client.messages.create({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 500,
-      system: systemPrompt,
-      messages,
-    });
+    const response = await rateLimiter.throttle(() =>
+      client.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 500,
+        system: systemPrompt,
+        messages,
+      })
+    );
 
     const textContent = response.content.find(block => block.type === "text");
     return textContent && "text" in textContent ? textContent.text : "";
@@ -65,7 +216,7 @@ Keep responses concise (2-3 sentences max) and natural.`;
     // Check if user is searching
     const lowerMessage = context.userMessage.toLowerCase();
     if (lowerMessage.includes("saree") || lowerMessage.includes("vendor")) {
-      return "Perfect! I'm searching for the best Banarasi saree vendors in Varanasi for you. I'll find authentic sellers with quality products.";
+      return "Perfect! I'm searching for the best Banarasi saree vendors in India for you. I'll find authentic sellers with quality products.";
     }
     
     return "Welcome! I'm Zenno, your AI shopping assistant. I help you find and purchase authentic Banarasi sarees. Tell me what kind of saree you're looking for!";
@@ -87,10 +238,23 @@ export async function extractUserIntent(message: string): Promise<{
     lowerMessage.includes("vendor") ||
     lowerMessage.includes("shop");
 
+  // Extract location from message - check for common Indian cities
+  const extractLocation = (msg: string): string | undefined => {
+    const cities = ["varanasi", "delhi", "mumbai", "bangalore", "chennai", "kolkata", 
+                   "hyderabad", "pune", "ahmedabad", "jaipur", "lucknow", "kanpur"];
+    const msgLower = msg.toLowerCase();
+    for (const city of cities) {
+      if (msgLower.includes(city)) {
+        return city.charAt(0).toUpperCase() + city.slice(1);
+      }
+    }
+    return undefined;
+  };
+
   if (!client) {
     return {
       wantToSearch: wantsSearch,
-      location: lowerMessage.includes("varanasi") ? "Varanasi" : undefined,
+      location: extractLocation(message),
     };
   }
 
@@ -109,11 +273,13 @@ Respond in JSON format:
   "preferences": "string or null"
 }`;
 
-    const response = await client.messages.create({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 200,
-      messages: [{ role: "user", content: prompt }],
-    });
+    const response = await rateLimiter.throttle(() =>
+      client.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 200,
+        messages: [{ role: "user", content: prompt }],
+      })
+    );
 
     const textContent = response.content.find(block => block.type === "text");
     if (!textContent || !("text" in textContent)) {
@@ -137,9 +303,21 @@ Respond in JSON format:
   } catch (error: any) {
     console.error("Intent extraction error (using fallback):", error.message);
     // Use keyword-based fallback for intent extraction
+    const extractLocation = (msg: string): string | undefined => {
+      const cities = ["varanasi", "delhi", "mumbai", "bangalore", "chennai", "kolkata", 
+                     "hyderabad", "pune", "ahmedabad", "jaipur", "lucknow", "kanpur"];
+      const msgLower = msg.toLowerCase();
+      for (const city of cities) {
+        if (msgLower.includes(city)) {
+          return city.charAt(0).toUpperCase() + city.slice(1);
+        }
+      }
+      return "India"; // Default to India if no specific city mentioned
+    };
+    
     return {
       wantToSearch: wantsSearch,
-      location: lowerMessage.includes("varanasi") ? "Varanasi" : "Varanasi", // Default to Varanasi
+      location: extractLocation(message),
       preferences: "authentic Banarasi sarees"
     };
   }
@@ -156,6 +334,19 @@ export async function generateResponseWithIntent(context: ConversationContext): 
 }> {
   const userMessageLower = context.userMessage.toLowerCase();
   
+  // Extract location from message - check for common Indian cities
+  const extractLocation = (msg: string): string => {
+    const cities = ["varanasi", "delhi", "mumbai", "bangalore", "chennai", "kolkata", 
+                   "hyderabad", "pune", "ahmedabad", "jaipur", "lucknow", "kanpur"];
+    const msgLower = msg.toLowerCase();
+    for (const city of cities) {
+      if (msgLower.includes(city)) {
+        return city.charAt(0).toUpperCase() + city.slice(1);
+      }
+    }
+    return "India"; // Default to India if no specific city mentioned
+  };
+  
   // Keyword-based intent extraction fallback
   const fallbackIntent = {
     wantToSearch: userMessageLower.includes("find") ||
@@ -165,7 +356,7 @@ export async function generateResponseWithIntent(context: ConversationContext): 
       userMessageLower.includes("vendor") ||
       userMessageLower.includes("shop") ||
       userMessageLower.includes("buy"),
-    location: userMessageLower.includes("varanasi") ? "Varanasi" : "Varanasi", // Default to Varanasi
+    location: extractLocation(context.userMessage),
     preferences: "authentic Banarasi sarees"
   };
 
@@ -176,7 +367,7 @@ export async function generateResponseWithIntent(context: ConversationContext): 
     }
     
     if (fallbackIntent.wantToSearch) {
-      return "Perfect! I'm searching for the best Banarasi saree vendors in Varanasi for you. I'll find authentic sellers with quality products.";
+      return "Perfect! I'm searching for the best Banarasi saree vendors in India for you. I'll find authentic sellers with quality products.";
     }
     
     return "Hello! I'm Zenno, your AI shopping assistant. I help you find and purchase authentic Banarasi sarees. Tell me what you're looking for!";
@@ -225,12 +416,14 @@ Analyze the user's message to determine if they want to search for vendors. Set 
       },
     ];
 
-    const response = await client.messages.create({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 500,
-      system: systemPrompt,
-      messages,
-    });
+    const response = await rateLimiter.throttle(() =>
+      client.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 500,
+        system: systemPrompt,
+        messages,
+      })
+    );
 
     const textContent = response.content.find(block => block.type === "text");
     if (!textContent || !("text" in textContent)) {
@@ -313,11 +506,13 @@ Create a friendly 2-3 sentence Hindi script that:
 
 Keep it natural and conversational.`;
 
-    const response = await client.messages.create({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 300,
-      messages: [{ role: "user", content: prompt }],
-    });
+    const response = await rateLimiter.throttle(() =>
+      client.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 300,
+        messages: [{ role: "user", content: prompt }],
+      })
+    );
 
     const textContent = response.content.find(block => block.type === "text");
     return textContent && "text" in textContent ? textContent.text : fallbackScript;

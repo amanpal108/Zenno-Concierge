@@ -9,15 +9,20 @@ let client: ReturnType<typeof twilio> | null = null;
 
 if (accountSid && authToken) {
   try {
-    // Check if accountSid starts with AC (actual account SID)
-    if (accountSid.startsWith("AC")) {
-      client = twilio(accountSid, authToken);
+    // Initialize Twilio client regardless of SID format for testing
+    client = twilio(accountSid, authToken);
+    
+    // Warn if it doesn't look like a production SID
+    if (!accountSid.startsWith("AC")) {
+      console.warn("Twilio Account SID should start with 'AC' for production. Using test credentials.");
     } else {
-      console.warn("Twilio Account SID should start with 'AC'. Call functionality may be limited.");
+      console.log("Twilio client initialized successfully");
     }
   } catch (error: any) {
     console.error("Failed to initialize Twilio client:", error.message);
   }
+} else {
+  console.warn("Twilio credentials not found. Calls will not work without TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN.");
 }
 
 export interface CallOptions {

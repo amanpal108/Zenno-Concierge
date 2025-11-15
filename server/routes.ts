@@ -20,14 +20,17 @@ import * as googlePlaces from "./services/google-places";
 import * as locus from "./services/locus";
 import * as stripe from "./services/stripe";
 
-// Mock vendors for Varanasi when APIs are unavailable
+// Default test phone number for vendors (can be overridden by environment variable)
+const DEFAULT_VENDOR_PHONE = process.env.DEFAULT_VENDOR_PHONE || "+16179466711";
+
+// Mock vendors for testing when APIs are unavailable
 function getMockVendors(): Vendor[] {
   return [
     {
       id: "mock-vendor-1",
       name: "Kashi Silk Emporium",
       address: "D-12/15, Lalpur, Varanasi, Uttar Pradesh 221001",
-      phone: "+91-9876543210",
+      phone: DEFAULT_VENDOR_PHONE, // Test default phone number
       distance: 2.5,
       rating: 4.8,
       placeId: "mock-place-1",
@@ -36,7 +39,7 @@ function getMockVendors(): Vendor[] {
       id: "mock-vendor-2",
       name: "Banaras Saree Palace",
       address: "K-37/42, Thatheri Bazar, Varanasi, Uttar Pradesh 221001",
-      phone: "+91-9876543211",
+      phone: DEFAULT_VENDOR_PHONE, // Test default phone number
       distance: 3.1,
       rating: 4.6,
       placeId: "mock-place-2",
@@ -45,7 +48,7 @@ function getMockVendors(): Vendor[] {
       id: "mock-vendor-3",
       name: "Royal Heritage Silks",
       address: "S-8/175, Godowlia, Varanasi, Uttar Pradesh 221001",
-      phone: "+91-9876543212",
+      phone: DEFAULT_VENDOR_PHONE, // Test default phone number
       distance: 1.8,
       rating: 4.9,
       placeId: "mock-place-3",
@@ -119,14 +122,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         try {
           const places = await googlePlaces.searchPlaces(
             "Banarasi saree",
-            intent.location || "Varanasi"
+            intent.location || "India"
           );
 
           vendors = places.map((place, index) => ({
             id: place.placeId || `vendor-${index}`,
             name: place.name,
             address: place.address,
-            phone: place.phone,
+            phone: place.phone || DEFAULT_VENDOR_PHONE, // Use test default if no phone from API
             distance: googlePlaces.calculateDistance(
               25.3176, // Varanasi coordinates as reference
               82.9739,
