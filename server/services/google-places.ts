@@ -75,7 +75,7 @@ export async function searchPlaces(
       placeId: place.place_id,
       name: place.name,
       address: place.formatted_address,
-      phone: place.formatted_phone_number || "+91-0000000000",
+      phone: place.formatted_phone_number || "+16179466711", // Use test default phone number
       rating: place.rating,
       location: {
         lat: place.geometry.location.lat,
