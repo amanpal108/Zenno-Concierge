@@ -35,6 +35,31 @@ export const callStatusSchema = z.enum([
 
 export type CallStatus = z.infer<typeof callStatusSchema>;
 
+// Conversation Stage Schema
+export const conversationStageSchema = z.enum([
+  "greeting",
+  "askRequirements",
+  "negotiatePrice",
+  "counterOffer",
+  "finalAgreement",
+  "noSaree",
+  "ended",
+]);
+
+export type ConversationStage = z.infer<typeof conversationStageSchema>;
+
+// Conversation State Schema
+export const conversationStateSchema = z.object({
+  stage: conversationStageSchema,
+  quantity: z.number().optional(),
+  initialPrice: z.number().optional(),
+  vendorPrice: z.number().optional(),
+  finalPrice: z.number().optional(),
+  attempts: z.number().default(0),
+});
+
+export type ConversationState = z.infer<typeof conversationStateSchema>;
+
 // Call Schema
 export const callSchema = z.object({
   id: z.string(),
@@ -43,6 +68,7 @@ export const callSchema = z.object({
   duration: z.number().optional(),
   negotiatedPrice: z.number().optional(),
   transcript: z.string().optional(),
+  conversationState: conversationStateSchema.optional(),
   startedAt: z.string().optional(),
   completedAt: z.string().optional(),
 });

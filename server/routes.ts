@@ -225,32 +225,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const vendor = session.selectedVendor;
 
-      // Generate negotiation script
-      const script = await anthropic.generateNegotiationScript(
-        vendor.name,
-        userBudget,
-        "Traditional Banarasi silk saree"
-      );
-
-      // Create call record
+      // Create call record with conversation state
       const call: Call = {
         id: randomUUID(),
         vendorId: vendor.id,
         status: "initiating",
+        conversationState: {
+          stage: "greeting",
+          quantity: 5, // Default quantity
+          initialPrice: userBudget,
+          attempts: 0,
+        },
         startedAt: new Date().toISOString(),
       };
 
       await storage.setCurrentCall(sessionId, call);
 
-      // Generate TwiML
-      const twiml = twilio.generateTwiML(script);
+      // Create conversation context in app storage
+      (app as any).callSessions = (app as any).callSessions || {};
+      (app as any).callSessions[call.id] = sessionId;
+
+      // Generate initial conversational TwiML
+      const baseUrl = `${req.protocol}://${req.get("host")}`;
+      const twiml = twilio.generateConversationalTwiML(
+        call.id,
+        sessionId,
+        "greeting",
+        baseUrl,
+        call.conversationState
+      );
 
       // Create a temporary endpoint for TwiML
-      const twimlUrl = `${req.protocol}://${req.get("host")}/api/calls/twiml/${call.id}`;
+      const twimlUrl = `${baseUrl}/api/calls/twiml/${sessionId}/${call.id}/greeting`;
 
       // Store TwiML temporarily (in production, use proper storage)
       (app as any).twimlStore = (app as any).twimlStore || {};
-      (app as any).twimlStore[call.id] = twiml;
+      (app as any).twimlStore[`${sessionId}-${call.id}-greeting`] = twiml;
 
       try {
         // Initiate Twilio call
@@ -319,7 +329,146 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // TwiML endpoint
+  // TwiML endpoint for conversation stages
+  app.all("/api/calls/twiml/:sessionId/:callId/:stage", async (req, res) => {
+    try {
+      const { sessionId, callId, stage } = req.params;
+      
+      // Get session and call data
+      const session = await storage.getSession(sessionId);
+      if (!session || !session.currentCall) {
+        return res.status(404).send("Session not found");
+      }
+
+      const baseUrl = `${req.protocol}://${req.get("host")}`;
+      const twiml = twilio.generateConversationalTwiML(
+        callId,
+        sessionId,
+        stage,
+        baseUrl,
+        session.currentCall.conversationState
+      );
+
+      res.type("text/xml");
+      res.send(twiml);
+    } catch (error: any) {
+      console.error("TwiML generation error:", error);
+      res.status(500).send("Error generating TwiML");
+    }
+  });
+
+  // Gather endpoint for handling user responses
+  app.post("/api/calls/gather/:sessionId/:callId/:stage", async (req, res) => {
+    try {
+      const { sessionId, callId, stage } = req.params;
+      const speechResult = req.body.SpeechResult?.toLowerCase() || "";
+      const digits = req.body.Digits || "";
+      
+      // Get session and call data
+      const session = await storage.getSession(sessionId);
+      if (!session || !session.currentCall) {
+        return res.status(404).send("Session not found");
+      }
+
+      let nextStage = stage;
+      const conversationState = session.currentCall.conversationState || {
+        stage: "greeting",
+        attempts: 0,
+        quantity: 5,
+        initialPrice: 8000
+      };
+
+      // Handle different stages
+      switch(stage) {
+        case "greeting":
+          // Check if vendor has sarees (yes = 1, हाँ)
+          if (digits === "1" || speechResult.includes("हाँ") || speechResult.includes("yes") || speechResult.includes("haan")) {
+            nextStage = "askRequirements";
+          } else if (digits === "2" || speechResult.includes("नहीं") || speechResult.includes("no") || speechResult.includes("nahi")) {
+            nextStage = "noSaree";
+          } else {
+            // Retry same stage
+            conversationState.attempts++;
+            if (conversationState.attempts > 2) {
+              nextStage = "noSaree";
+            }
+          }
+          break;
+          
+        case "askRequirements":
+          // Extract quantity and price from speech
+          const numbers = speechResult.match(/\d+/g);
+          if (numbers && numbers.length > 0) {
+            conversationState.quantity = parseInt(numbers[0]) || 5;
+            if (numbers.length > 1) {
+              conversationState.vendorPrice = parseInt(numbers[1]);
+            }
+          }
+          nextStage = "negotiatePrice";
+          break;
+          
+        case "negotiatePrice":
+          // Check vendor's response on initial price
+          if (speechResult.includes("हाँ") || speechResult.includes("yes") || digits === "1") {
+            conversationState.finalPrice = conversationState.initialPrice;
+            nextStage = "finalAgreement";
+          } else {
+            // Extract vendor's counter price
+            const priceMatch = speechResult.match(/\d+/);
+            if (priceMatch) {
+              conversationState.vendorPrice = parseInt(priceMatch[0]);
+            } else {
+              conversationState.vendorPrice = (conversationState.initialPrice || 8000) + 2000;
+            }
+            conversationState.finalPrice = Math.round(
+              ((conversationState.initialPrice || 8000) + conversationState.vendorPrice) / 2
+            );
+            nextStage = "counterOffer";
+          }
+          break;
+          
+        case "counterOffer":
+          // Check if vendor agrees to counter offer
+          if (speechResult.includes("हाँ") || speechResult.includes("yes") || 
+              speechResult.includes("ठीक") || speechResult.includes("चलेगा") || digits === "1") {
+            nextStage = "finalAgreement";
+          } else {
+            // Try one more counter
+            conversationState.finalPrice = (conversationState.finalPrice || 9000) + 500;
+            nextStage = "finalAgreement";
+          }
+          break;
+          
+        default:
+          nextStage = "ended";
+      }
+
+      // Update conversation state
+      conversationState.stage = nextStage as any;
+      await storage.updateCall(sessionId, {
+        conversationState: conversationState,
+        negotiatedPrice: conversationState.finalPrice
+      });
+
+      // Generate response TwiML
+      const baseUrl = `${req.protocol}://${req.get("host")}`;
+      const twiml = twilio.generateConversationalTwiML(
+        callId,
+        sessionId,
+        nextStage,
+        baseUrl,
+        conversationState
+      );
+
+      res.type("text/xml");
+      res.send(twiml);
+    } catch (error: any) {
+      console.error("Gather handling error:", error);
+      res.status(500).send("Error processing response");
+    }
+  });
+
+  // Legacy TwiML endpoint for backwards compatibility
   app.get("/api/calls/twiml/:callId", (req, res) => {
     const twiml = (app as any).twimlStore?.[req.params.callId];
     if (!twiml) {
