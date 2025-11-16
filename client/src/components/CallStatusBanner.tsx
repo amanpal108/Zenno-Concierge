@@ -1,23 +1,29 @@
 import { type Call, type CallStatus } from "@shared/schema";
 import { Card } from "@/components/ui/card";
-import { Phone, PhoneCall, PhoneOff, CheckCircle2, XCircle } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Phone, PhoneCall, PhoneOff, CheckCircle2, XCircle, RefreshCw, Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useEffect, useState } from "react";
 
 interface CallStatusBannerProps {
   call: Call;
+  onRetry?: () => void;
+  isRetrying?: boolean;
 }
 
-const statusConfig: Record<CallStatus, { icon: typeof Phone; label: string; color: string }> = {
+const statusConfig: Record<CallStatus, { icon: typeof Phone; label: string; color: string; isError?: boolean }> = {
   "initiating": { icon: Phone, label: "Initiating call", color: "text-blue-500" },
   "ringing": { icon: PhoneCall, label: "Ringing", color: "text-yellow-500" },
   "in-progress": { icon: PhoneCall, label: "Call in progress", color: "text-green-500" },
   "negotiating": { icon: PhoneCall, label: "Negotiating price", color: "text-purple-500" },
   "completed": { icon: CheckCircle2, label: "Call completed", color: "text-green-600" },
-  "failed": { icon: XCircle, label: "Call failed", color: "text-red-500" },
+  "failed": { icon: XCircle, label: "Call failed", color: "text-red-500", isError: true },
+  "no-answer": { icon: PhoneOff, label: "No answer", color: "text-orange-500", isError: true },
+  "hung-up": { icon: PhoneOff, label: "Call disconnected", color: "text-red-500", isError: true },
+  "timeout": { icon: Clock, label: "Call timed out", color: "text-orange-500", isError: true },
 };
 
-export function CallStatusBanner({ call }: CallStatusBannerProps) {
+export function CallStatusBanner({ call, onRetry, isRetrying }: CallStatusBannerProps) {
   const [duration, setDuration] = useState(0);
   const config = statusConfig[call.status];
   const Icon = config.icon;
@@ -65,17 +71,42 @@ export function CallStatusBanner({ call }: CallStatusBannerProps) {
           </div>
         </div>
         
-        {(call.status === "in-progress" || call.status === "negotiating") && (
-          <div className="text-sm font-mono text-muted-foreground">
-            {formatDuration(duration)}
-          </div>
-        )}
-        
-        {call.duration && call.status === "completed" && (
-          <div className="text-sm font-mono text-muted-foreground">
-            Duration: {formatDuration(call.duration)}
-          </div>
-        )}
+        <div className="flex items-center gap-3">
+          {(call.status === "in-progress" || call.status === "negotiating") && (
+            <div className="text-sm font-mono text-muted-foreground">
+              {formatDuration(duration)}
+            </div>
+          )}
+          
+          {call.duration && call.status === "completed" && (
+            <div className="text-sm font-mono text-muted-foreground">
+              Duration: {formatDuration(call.duration)}
+            </div>
+          )}
+          
+          {config.isError && onRetry && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={onRetry}
+              disabled={isRetrying}
+              className="gap-2"
+              data-testid="button-retry-call"
+            >
+              {isRetrying ? (
+                <>
+                  <RefreshCw className="h-4 w-4 animate-spin" />
+                  Retrying...
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="h-4 w-4" />
+                  Retry Call
+                </>
+              )}
+            </Button>
+          )}
+        </div>
       </div>
     </Card>
   );

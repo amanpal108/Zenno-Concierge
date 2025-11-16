@@ -155,6 +155,33 @@ export default function Home() {
     },
   });
   
+  // Retry call mutation
+  const retryCallMutation = useMutation({
+    mutationFn: async () => {
+      if (!sessionId || !session?.selectedVendor) throw new Error("No vendor selected");
+      const response = await apiRequest("POST", "/api/calls/initiate", {
+        sessionId,
+        vendorId: session.selectedVendor.id,
+        userBudget: 10000, // Default budget ₹10,000
+      });
+      return await response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/session", sessionId] });
+      toast({
+        title: "Retrying Call",
+        description: `Calling ${session?.selectedVendor?.name} again...`,
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Retry Failed",
+        description: error.message || "Failed to retry call",
+        variant: "destructive",
+      });
+    },
+  });
+  
   // Payment approval mutation
   const approvePaymentMutation = useMutation({
     mutationFn: async (approved: boolean) => {
@@ -376,7 +403,11 @@ export default function Home() {
         {session?.currentCall && (
           <div className="px-4 sm:px-6 pb-4">
             <div className="max-w-4xl mx-auto">
-              <CallStatusBanner call={session.currentCall} />
+              <CallStatusBanner 
+                call={session.currentCall}
+                onRetry={() => retryCallMutation.mutate()}
+                isRetrying={retryCallMutation.isPending}
+              />
             </div>
           </div>
         )}
