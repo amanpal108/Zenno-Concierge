@@ -265,67 +265,113 @@ export async function registerRoutes(app: Express): Promise<Server> {
       (app as any).twimlStore = (app as any).twimlStore || {};
       (app as any).twimlStore[`${sessionId}-${call.id}-greeting`] = twiml;
 
-      try {
-        // Initiate Twilio call
-        const twilioCall = await twilio.initiateCall({
-          to: vendor.phone,
-          twimlUrl,
-          statusCallback: `${req.protocol}://${req.get("host")}/api/calls/webhook/${sessionId}/${call.id}`,
-        });
+      // MOCK CALL FOR TESTING - Bypass Twilio errors
+      const USE_MOCK_CALL = true; // Set to false to use real Twilio calls
+      
+      if (!USE_MOCK_CALL) {
+        try {
+          // Initiate Twilio call
+          const twilioCall = await twilio.initiateCall({
+            to: vendor.phone,
+            twimlUrl,
+            statusCallback: `${req.protocol}://${req.get("host")}/api/calls/webhook/${sessionId}/${call.id}`,
+          });
 
-        await storage.updateCall(sessionId, {
-          status: "ringing",
-        });
+          await storage.updateCall(sessionId, {
+            status: "ringing",
+          });
 
-        res.json({ success: true, call, callSid: twilioCall.callSid });
-      } catch (twilioError: any) {
-        // Simulate call for development if Twilio fails
-        console.warn("Twilio call failed, simulating call:", twilioError.message);
-
-        await storage.updateCall(sessionId, {
-          status: "ringing",
-        });
-
-        // Simulate call progression
-        setTimeout(async () => {
-          try {
-            await storage.updateCall(sessionId, {
-              status: "in-progress",
-            });
-
-            // Simulate completed call after 5 seconds
-            setTimeout(async () => {
-              try {
-                const negotiatedPrice = Math.floor(Math.random() * 5000) + 8000;
-                await storage.updateCall(sessionId, {
-                  status: "completed",
-                  duration: 45,
-                  negotiatedPrice,
-                  completedAt: new Date().toISOString(),
-                });
-
-                await storage.updateSession(sessionId, {
-                  journeyStatus: "processing-payment",
-                });
-
-                const msg: Message = {
-                  id: randomUUID(),
-                  role: "assistant",
-                  content: `Great news! I've negotiated a price of ₹${negotiatedPrice.toLocaleString()} for your Banarasi saree. Processing payment now...`,
-                  timestamp: new Date().toISOString(),
-                };
-                await storage.addMessage(sessionId, msg);
-              } catch (err) {
-                console.error("Error completing simulated call:", err);
-              }
-            }, 5000);
-          } catch (err) {
-            console.error("Error updating simulated call:", err);
-          }
-        }, 2000);
-
-        res.json({ success: true, call, callSid: "simulated-call-" + call.id });
+          res.json({ success: true, call, callSid: twilioCall.callSid });
+        } catch (twilioError: any) {
+          console.warn("Twilio call failed, falling back to mock:", twilioError.message);
+          // Fall through to mock implementation
+        }
       }
+      
+      // Mock call implementation for happy flow testing
+      console.log("Using mock call implementation for vendor:", vendor.name);
+      
+      await storage.updateCall(sessionId, {
+        status: "ringing",
+      });
+
+      // Simulate call progression with shorter delays for better UX
+      setTimeout(async () => {
+        try {
+          await storage.updateCall(sessionId, {
+            status: "in-progress",
+          });
+          
+          // Add message about negotiating
+          const negotiatingMsg: Message = {
+            id: randomUUID(),
+            role: "assistant",
+            content: `I'm now speaking with ${vendor.name} in Hindi to negotiate the best price for your Banarasi saree...`,
+            timestamp: new Date().toISOString(),
+          };
+          await storage.addMessage(sessionId, negotiatingMsg);
+
+          // Simulate negotiation phase after 3 seconds
+          setTimeout(async () => {
+            try {
+              await storage.updateCall(sessionId, {
+                status: "negotiating",
+              });
+              
+              // Simulate completed negotiation after another 3 seconds
+              setTimeout(async () => {
+                try {
+                  // Generate a realistic negotiated price (10-30% discount from initial)
+                  const basePrice = 12000;
+                  const discount = Math.floor(Math.random() * 20) + 10; // 10-30% discount
+                  const negotiatedPrice = Math.floor(basePrice * (1 - discount/100));
+                  
+                  await storage.updateCall(sessionId, {
+                    status: "completed",
+                    duration: 45,
+                    negotiatedPrice,
+                    completedAt: new Date().toISOString(),
+                  });
+
+                  // Create transaction awaiting approval
+                  const transaction: Transaction = {
+                    id: randomUUID(),
+                    sessionId,
+                    vendorId: vendor.id,
+                    amount: negotiatedPrice,
+                    currency: "INR",
+                    status: "awaiting-approval",
+                    createdAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString(),
+                  };
+                  
+                  await storage.createTransaction(transaction);
+                  await storage.updateSession(sessionId, { 
+                    transaction,
+                    journeyStatus: "processing-payment" 
+                  });
+
+                  const successMsg: Message = {
+                    id: randomUUID(),
+                    role: "assistant",
+                    content: `Great news! I've successfully negotiated with ${vendor.name}. They've agreed to a price of ₹${negotiatedPrice.toLocaleString()} for a premium Banarasi saree.\n\nOriginal price: ₹${basePrice.toLocaleString()}\nNegotiated price: ₹${negotiatedPrice.toLocaleString()}\nYou saved: ₹${(basePrice - negotiatedPrice).toLocaleString()} (${discount}% discount)\n\nWould you like to proceed with this purchase?`,
+                    timestamp: new Date().toISOString(),
+                  };
+                  await storage.addMessage(sessionId, successMsg);
+                } catch (err) {
+                  console.error("Error completing mock call:", err);
+                }
+              }, 3000);
+            } catch (err) {
+              console.error("Error updating mock negotiation:", err);
+            }
+          }, 3000);
+        } catch (err) {
+          console.error("Error updating mock call:", err);
+        }
+      }, 2000);
+
+      res.json({ success: true, call, callSid: "mock-call-" + call.id });
     } catch (error: any) {
       console.error("Call initiation error:", error);
       res.status(500).json({ error: error.message });
