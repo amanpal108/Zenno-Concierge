@@ -334,54 +334,140 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // TwiML endpoint for conversation stages with attempt tracking
   app.all("/api/calls/twiml/:sessionId/:callId/:stage", async (req, res) => {
-    try {
-      const { sessionId, callId, stage } = req.params;
-      const attempt = parseInt(req.query.attempt as string) || 1;
-      
-      // Get session and call data
-      const session = await storage.getSession(sessionId);
-      if (!session || !session.currentCall) {
-        return res.status(404).send("Session not found");
-      }
-
-      const baseUrl = `${req.protocol}://${req.get("host")}`;
-      const twiml = twilio.generateConversationalTwiML(
-        callId,
-        sessionId,
-        stage,
-        baseUrl,
-        session.currentCall.conversationState,
-        attempt
-      );
-
+    const { sessionId, callId, stage } = req.params;
+    
+    // Helper function to return error TwiML
+    const returnErrorTwiML = (errorMessage?: string) => {
+      console.error(`[TwiML Error] ${errorMessage || "Unknown error"} - SessionId: ${sessionId}, CallId: ${callId}, Stage: ${stage}`);
+      const errorTwiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Google.hi-IN-Standard-A" language="hi-IN">
+    क्षमा करें, कुछ तकनीकी समस्या हुई है। कृपया कुछ देर बाद फिर से कोशिश करें।
+  </Say>
+  <Hangup/>
+</Response>`;
       res.type("text/xml");
-      res.send(twiml);
-    } catch (error: any) {
-      console.error("TwiML generation error:", error);
-      res.status(500).send("Error generating TwiML");
-    }
-  });
-
-  // Gather endpoint for handling user responses with attempt tracking
-  app.post("/api/calls/gather/:sessionId/:callId/:stage", async (req, res) => {
+      res.send(errorTwiml);
+    };
+    
     try {
-      const { sessionId, callId, stage } = req.params;
-      const speechResult = req.body.SpeechResult?.toLowerCase() || "";
-      const digits = req.body.Digits || "";
+      console.log(`[TwiML Request] SessionId: ${sessionId}, CallId: ${callId}, Stage: ${stage}`);
+      
       const attempt = parseInt(req.query.attempt as string) || 1;
       
-      // Get session and call data
-      const session = await storage.getSession(sessionId);
+      // Get session and call data with error handling
+      let session;
+      try {
+        session = await storage.getSession(sessionId);
+      } catch (storageError: any) {
+        return returnErrorTwiML(`Failed to get session: ${storageError.message}`);
+      }
+      
       if (!session || !session.currentCall) {
-        return res.status(404).send("Session not found");
+        return returnErrorTwiML("Session or current call not found");
       }
 
-      let nextStage = stage;
+      // Ensure conversation state is properly initialized
       const conversationState = session.currentCall.conversationState || {
         stage: "greeting",
         attempts: 0,
         quantity: 5,
         initialPrice: 8000
+      };
+
+      const baseUrl = `${req.protocol}://${req.get("host")}`;
+      
+      let twiml;
+      try {
+        twiml = twilio.generateConversationalTwiML(
+          callId,
+          sessionId,
+          stage,
+          baseUrl,
+          conversationState,
+          attempt
+        );
+      } catch (twimlError: any) {
+        console.error(`[TwiML Generation Error] ${twimlError.message}`);
+        return returnErrorTwiML(`Failed to generate TwiML: ${twimlError.message}`);
+      }
+
+      res.type("text/xml");
+      res.send(twiml);
+    } catch (error: any) {
+      console.error(`[TwiML Critical Error] Unexpected error: ${error.message}`);
+      console.error(`[TwiML Stack Trace]`, error.stack);
+      
+      // Always return valid TwiML, never 500 with text
+      const fallbackTwiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Google.hi-IN-Standard-A" language="hi-IN">
+    क्षमा करें, कुछ तकनीकी समस्या हुई है। कृपया कुछ देर बाद फिर से कोशिश करें।
+  </Say>
+  <Hangup/>
+</Response>`;
+      
+      res.type("text/xml");
+      res.send(fallbackTwiml);
+    }
+  });
+
+  // Gather endpoint for handling user responses with attempt tracking
+  app.post("/api/calls/gather/:sessionId/:callId/:stage", async (req, res) => {
+    const { sessionId, callId, stage } = req.params;
+    
+    // Helper function to return error TwiML
+    const returnErrorTwiML = (errorMessage?: string) => {
+      console.error(`[Gather Error] ${errorMessage || "Unknown error"} - SessionId: ${sessionId}, CallId: ${callId}, Stage: ${stage}`);
+      const baseUrl = `${req.protocol}://${req.get("host")}`;
+      const errorTwiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Google.hi-IN-Standard-A" language="hi-IN">
+    क्षमा करें, कुछ तकनीकी समस्या हुई है। फिर से कोशिश कर रहे हैं।
+  </Say>
+  <Redirect method="POST">${baseUrl}/api/calls/twiml/${sessionId}/${callId}/greeting</Redirect>
+</Response>`;
+      res.type("text/xml");
+      res.send(errorTwiml);
+    };
+
+    try {
+      // Log incoming request details
+      console.log(`[Gather Request] SessionId: ${sessionId}, CallId: ${callId}, Stage: ${stage}`);
+      console.log(`[Gather Input] SpeechResult: "${req.body.SpeechResult}", Digits: "${req.body.Digits}"`);
+      
+      const speechResult = req.body.SpeechResult?.toLowerCase() || "";
+      const digits = req.body.Digits || "";
+      const attempt = parseInt(req.query.attempt as string) || 1;
+      
+      // Validate stage parameter
+      const validStages = ["greeting", "askRequirements", "negotiatePrice", "counterOffer", "finalAgreement", "noSaree", "ended", "timeout"];
+      if (!validStages.includes(stage)) {
+        return returnErrorTwiML(`Invalid stage: ${stage}`);
+      }
+      
+      // Get session and call data with error handling
+      let session;
+      try {
+        session = await storage.getSession(sessionId);
+      } catch (storageError: any) {
+        return returnErrorTwiML(`Failed to get session: ${storageError.message}`);
+      }
+      
+      if (!session || !session.currentCall) {
+        return returnErrorTwiML("Session or current call not found");
+      }
+
+      let nextStage = stage;
+      
+      // Ensure conversation state is fully initialized with all required fields
+      const conversationState = {
+        stage: session.currentCall.conversationState?.stage || "greeting",
+        attempts: session.currentCall.conversationState?.attempts || 0,
+        quantity: session.currentCall.conversationState?.quantity || 5,
+        initialPrice: session.currentCall.conversationState?.initialPrice || 8000,
+        vendorPrice: session.currentCall.conversationState?.vendorPrice,
+        finalPrice: session.currentCall.conversationState?.finalPrice
       };
 
       // Track attempts using the single attempts field
@@ -557,28 +643,60 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.send(twiml);
       }
 
-      // Update conversation state
+      // Update conversation state with error handling
       conversationState.stage = nextStage as any;
-      await storage.updateCall(sessionId, {
-        conversationState: conversationState,
-        negotiatedPrice: conversationState.finalPrice
-      });
+      
+      console.log(`[Gather] Updating conversation state - Next stage: ${nextStage}, Final price: ${conversationState.finalPrice}`);
+      
+      try {
+        await storage.updateCall(sessionId, {
+          conversationState: conversationState,
+          negotiatedPrice: conversationState.finalPrice
+        });
+      } catch (updateError: any) {
+        console.error(`[Gather Error] Failed to update call state: ${updateError.message}`);
+        return returnErrorTwiML(`Failed to update call state: ${updateError.message}`);
+      }
 
-      // Generate response TwiML
-      const baseUrl = `${req.protocol}://${req.get("host")}`;
-      const twiml = twilio.generateConversationalTwiML(
-        callId,
-        sessionId,
-        nextStage,
-        baseUrl,
-        conversationState
-      );
+      // Generate response TwiML with error handling
+      let twiml;
+      try {
+        const baseUrl = `${req.protocol}://${req.get("host")}`;
+        console.log(`[Gather] Generating TwiML for next stage: ${nextStage}`);
+        
+        twiml = twilio.generateConversationalTwiML(
+          callId,
+          sessionId,
+          nextStage,
+          baseUrl,
+          conversationState
+        );
+        
+        console.log(`[Gather Success] TwiML generated successfully for stage: ${nextStage}`);
+      } catch (twimlError: any) {
+        console.error(`[Gather Error] Failed to generate TwiML: ${twimlError.message}`);
+        return returnErrorTwiML(`Failed to generate TwiML: ${twimlError.message}`);
+      }
 
       res.type("text/xml");
       res.send(twiml);
     } catch (error: any) {
-      console.error("Gather handling error:", error);
-      res.status(500).send("Error processing response");
+      // This should never be reached now, but keep as ultimate fallback
+      console.error(`[Gather Critical Error] Unexpected error: ${error.message}`);
+      console.error(`[Gather Stack Trace]`, error.stack);
+      
+      // Always return valid TwiML, never 500 with text
+      const baseUrl = `${req.protocol}://${req.get("host")}`;
+      const fallbackTwiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Google.hi-IN-Standard-A" language="hi-IN">
+    क्षमा करें, कुछ तकनीकी समस्या हुई है। फिर से कोशिश कर रहे हैं।
+  </Say>
+  <Redirect method="POST">${baseUrl}/api/calls/twiml/${sessionId}/${callId}/greeting</Redirect>
+</Response>`;
+      
+      res.type("text/xml");
+      res.send(fallbackTwiml);
     }
   });
 
