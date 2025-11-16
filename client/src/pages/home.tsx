@@ -4,7 +4,7 @@ import { type Message, type Vendor, type Session, type ChatRequest } from "@shar
 import { ChatMessage } from "@/components/ChatMessage";
 import { TypingIndicator } from "@/components/TypingIndicator";
 import { ChatInput } from "@/components/ChatInput";
-import { VendorList } from "@/components/VendorList";
+import { VendorCarousel } from "@/components/VendorCarousel";
 import { CallStatusBanner } from "@/components/CallStatusBanner";
 import { PaymentSummary } from "@/components/PaymentSummary";
 import { JourneyTimeline } from "@/components/JourneyTimeline";
@@ -203,14 +203,6 @@ export default function Home() {
         <JourneyTimeline currentStatus={session.journeyStatus} />
       )}
       
-      {vendors.length > 0 && (
-        <VendorList
-          vendors={vendors}
-          selectedVendor={selectedVendor}
-          onSelectVendor={handleSelectVendor}
-        />
-      )}
-      
       {session?.transaction && selectedVendor && (
         <PaymentSummary
           transaction={session.transaction}
@@ -302,6 +294,17 @@ export default function Home() {
                 {messages.map((message) => (
                   <ChatMessage key={message.id} message={message} />
                 ))}
+                
+                {/* Show vendor carousel when in selecting-vendor stage */}
+                {session?.journeyStatus === "selecting-vendor" && vendors.length > 0 && (
+                  <div className="px-4 sm:px-6 my-4">
+                    <VendorCarousel
+                      vendors={vendors}
+                      selectedVendor={selectedVendor}
+                      onSelectVendor={handleSelectVendor}
+                    />
+                  </div>
+                )}
                 
                 {sendMessageMutation.isPending && <TypingIndicator />}
                 
