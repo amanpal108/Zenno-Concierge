@@ -1,0 +1,85 @@
+Step 1: Traveler Payment (Home Currency → USDC)
+Traveler (EUR/INR/JPY) 
+    ↓ [Stripe Payment Intent]
+    → Stripe processes fiat payment
+    → Triggers webhook on success
+    → Your backend calculates USDC amount
+    → Initiates Coinbase Commerce/Buy API
+    → USDC credited to your Locus wallet
+Why Stripe first?
+
+Accepts 135+ currencies
+Handles 3D Secure authentication
+Better conversion rates than direct crypto purchases
+Familiar UX for travelers
+
+Step 2: AI Agent Payment Execution (USDC Transfer)
+Your Locus Wallet ($10 USDC)
+    ↓ [AI Agent authorized payment]
+    → Locus policy check (spending limits, approved vendors)
+    → Smart contract executes USDC transfer on Base
+    → USDC sent to vendor's designated wallet
+    → Transaction recorded on-chain
+Locus Configuration:
+javascript// Policy setup for your AI agent
+{
+  "spending_limit": "100 USDC per transaction",
+  "daily_limit": "1000 USDC",
+  "approved_contacts": ["vendor_wallets_whitelist"],
+  "require_negotiation_approval": true
+}
+```
+
+#### **Step 3: Vendor Settlement (USDC → Vendor Currency)**
+```
+Vendor's Wallet (USDC on Base)
+    ↓ [Auto-settlement trigger]
+    → Coinbase Commerce webhook notification
+    → Your backend calls Coinbase Exchange API
+    → Convert USDC → Vendor's fiat (USD/EUR/INR)
+    → Deposit to vendor's bank account
+    → Or: vendor keeps USDC (their choice)
+Technical Integration Stack
+1. Stripe Integration
+javascript// Create payment intent in traveler's currency
+const paymentIntent = await stripe.paymentIntents.create({
+  amount: 5000, // €50.00
+  currency: 'eur',
+  metadata: {
+    traveler_id: 'user_123',
+    vendor_id: 'vendor_456',
+    negotiated_price_usd: '55'
+  }
+});
+2. Locus Integration (AI Agent)
+javascript// Initialize Locus agent with policy
+import { LocusClient } from '@locus-technologies/sdk';
+
+const locusClient = new LocusClient({
+  apiKey: process.env.LOCUS_API_KEY,
+  network: 'base-mainnet'
+});
+
+// AI agent sends payment
+await locusClient.sendPayment({
+  to: vendorWalletAddress,
+  amount: negotiatedPriceInUSDC,
+  currency: 'USDC',
+  metadata: {
+    order_id: 'order_789',
+    negotiation_log: aiNegotiationHistory
+  }
+});
+3. Coinbase Integration
+javascript// For vendor settlement
+const coinbaseClient = new CoinbaseCommerceClient({
+  apiKey: process.env.COINBASE_API_KEY
+});
+
+// Convert USDC to vendor's fiat
+await coinbaseClient.withdrawals.create({
+  amount: usdcAmount,
+  currency: 'USDC',
+  destination: vendorBankAccount,
+  destination_currency: 'MXN' // or vendor's currency
+});

@@ -115,11 +115,13 @@ export function generateConversationalTwiML(
   sessionId: string,
   stage: string,
   baseUrl: string,
-  conversationData?: Partial<ConversationState>
+  conversationData?: Partial<ConversationState>,
+  attempt: number = 1
 ): string {
   const scripts = NEGOTIATION_SCRIPTS;
   let currentScript = scripts.greeting;
   let processedMessage = "";
+  const maxAttempts = 3;
   
   switch(stage) {
     case 'greeting':
@@ -171,13 +173,31 @@ export function generateConversationalTwiML(
 </Response>`;
   }
   
-  // All other stages need Gather for user input
-  const actionUrl = `${baseUrl}/api/calls/gather/${sessionId}/${callId}/${stage}`;
-  const redirectUrl = `${baseUrl}/api/calls/twiml/${sessionId}/${callId}/${stage}`;
+  // All other stages need Gather for user input with attempt tracking
+  const actionUrl = `${baseUrl}/api/calls/gather/${sessionId}/${callId}/${stage}?attempt=${attempt}`;
+  const nextAttempt = attempt + 1;
+  
+  // If we've reached max attempts, say goodbye and hang up
+  if (attempt >= maxAttempts) {
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Gather input="speech dtmf" timeout="5" speechTimeout="3" language="hi-IN" 
+          action="${actionUrl}" method="POST" numDigits="10">
+    <Say voice="Google.hi-IN-Standard-A" language="hi-IN">${processedMessage}</Say>
+  </Gather>
+  <Say voice="Google.hi-IN-Standard-A" language="hi-IN">
+    क्षमा करें, मैं आपकी बात सुन नहीं पा रहा हूं। कृपया बाद में कॉल करें। धन्यवाद।
+  </Say>
+  <Hangup/>
+</Response>`;
+  }
+  
+  // Regular attempt with redirect for retry
+  const redirectUrl = `${baseUrl}/api/calls/twiml/${sessionId}/${callId}/${stage}?attempt=${nextAttempt}`;
   
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Gather input="speech dtmf" timeout="6" speechTimeout="3" language="hi-IN" 
+  <Gather input="speech dtmf" timeout="5" speechTimeout="3" language="hi-IN" 
           action="${actionUrl}" method="POST" numDigits="10">
     <Say voice="Google.hi-IN-Standard-A" language="hi-IN">${processedMessage}</Say>
   </Gather>

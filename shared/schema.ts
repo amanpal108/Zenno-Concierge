@@ -30,6 +30,9 @@ export const callStatusSchema = z.enum([
   "in-progress",
   "negotiating",
   "completed",
+  "no-answer",
+  "hung-up",
+  "timeout",
   "failed",
 ]);
 

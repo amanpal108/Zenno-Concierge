@@ -267,7 +267,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const twilioCall = await twilio.initiateCall({
           to: vendor.phone,
           twimlUrl,
-          statusCallback: `${req.protocol}://${req.get("host")}/api/calls/webhook/${call.id}`,
+          statusCallback: `${req.protocol}://${req.get("host")}/api/calls/webhook/${sessionId}/${call.id}`,
         });
 
         await storage.updateCall(sessionId, {
@@ -329,10 +329,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // TwiML endpoint for conversation stages
+  // TwiML endpoint for conversation stages with attempt tracking
   app.all("/api/calls/twiml/:sessionId/:callId/:stage", async (req, res) => {
     try {
       const { sessionId, callId, stage } = req.params;
+      const attempt = parseInt(req.query.attempt as string) || 1;
       
       // Get session and call data
       const session = await storage.getSession(sessionId);
@@ -346,7 +347,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         sessionId,
         stage,
         baseUrl,
-        session.currentCall.conversationState
+        session.currentCall.conversationState,
+        attempt
       );
 
       res.type("text/xml");
@@ -357,12 +359,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Gather endpoint for handling user responses
+  // Gather endpoint for handling user responses with attempt tracking
   app.post("/api/calls/gather/:sessionId/:callId/:stage", async (req, res) => {
     try {
       const { sessionId, callId, stage } = req.params;
       const speechResult = req.body.SpeechResult?.toLowerCase() || "";
       const digits = req.body.Digits || "";
+      const attempt = parseInt(req.query.attempt as string) || 1;
       
       // Get session and call data
       const session = await storage.getSession(sessionId);
@@ -378,18 +381,63 @@ export async function registerRoutes(app: Express): Promise<Server> {
         initialPrice: 8000
       };
 
-      // Handle different stages
+      // Track attempts using the single attempts field
+      const maxAttempts = 3;
+      
+      // Check if we got no input (timeout scenario)
+      const hasInput = speechResult || digits;
+      
+      if (!hasInput && conversationState.attempts >= maxAttempts) {
+        // No response after max attempts - timeout scenario
+        console.log(`Timeout after ${maxAttempts} attempts on stage ${stage}`);
+        
+        // Update call status to timeout
+        await storage.updateCall(sessionId, {
+          status: "timeout",
+          completedAt: new Date().toISOString(),
+        });
+        
+        // Reset journey for retry
+        await storage.updateSession(sessionId, {
+          journeyStatus: "selecting-vendor",
+        });
+        
+        // Add timeout message
+        const msg: Message = {
+          id: randomUUID(),
+          role: "assistant",
+          content: "The vendor was not responsive during the call. Would you like to try another vendor?",
+          timestamp: new Date().toISOString(),
+        };
+        await storage.addMessage(sessionId, msg);
+        
+        // Return timeout TwiML
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Google.hi-IN-Standard-A" language="hi-IN">
+    क्षमा करें, मैं आपकी बात सुन नहीं पा रहा हूं। कृपया बाद में कॉल करें। धन्यवाद।
+  </Say>
+  <Hangup/>
+</Response>`;
+        
+        res.type("text/xml");
+        return res.send(twiml);
+      }
+      
+      // Handle different stages with proper attempt tracking
       switch(stage) {
         case "greeting":
           // Check if vendor has sarees (yes = 1, हाँ)
           if (digits === "1" || speechResult.includes("हाँ") || speechResult.includes("yes") || speechResult.includes("haan")) {
             nextStage = "askRequirements";
+            conversationState.attempts = 0; // Reset attempts when moving to new stage
           } else if (digits === "2" || speechResult.includes("नहीं") || speechResult.includes("no") || speechResult.includes("nahi")) {
             nextStage = "noSaree";
+            conversationState.attempts = 0; // Reset attempts when moving to new stage
           } else {
-            // Retry same stage
-            conversationState.attempts++;
-            if (conversationState.attempts > 2) {
+            // Invalid or no response - retry same stage
+            conversationState.attempts = (conversationState.attempts || 0) + 1;
+            if (conversationState.attempts >= maxAttempts) {
               nextStage = "noSaree";
             }
           }
@@ -403,8 +451,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
             if (numbers.length > 1) {
               conversationState.vendorPrice = parseInt(numbers[1]);
             }
+            nextStage = "negotiatePrice";
+            conversationState.attempts = 0; // Reset attempts when moving to new stage
+          } else if (!hasInput) {
+            // No response - retry
+            conversationState.attempts = (conversationState.attempts || 0) + 1;
+            if (conversationState.attempts >= maxAttempts) {
+              // Timeout after max attempts
+              nextStage = "timeout";
+            }
+          } else {
+            // Got some response but couldn't parse - move forward with defaults
+            nextStage = "negotiatePrice";
+            conversationState.attempts = 0; // Reset attempts when moving to new stage
           }
-          nextStage = "negotiatePrice";
           break;
           
         case "negotiatePrice":
@@ -412,6 +472,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           if (speechResult.includes("हाँ") || speechResult.includes("yes") || digits === "1") {
             conversationState.finalPrice = conversationState.initialPrice;
             nextStage = "finalAgreement";
+            conversationState.attempts = 0; // Reset attempts when moving to new stage
+          } else if (!hasInput) {
+            // No response - retry
+            conversationState.attempts = (conversationState.attempts || 0) + 1;
+            if (conversationState.attempts >= maxAttempts) {
+              nextStage = "timeout";
+            }
           } else {
             // Extract vendor's counter price
             const priceMatch = speechResult.match(/\d+/);
@@ -424,6 +491,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               ((conversationState.initialPrice || 8000) + conversationState.vendorPrice) / 2
             );
             nextStage = "counterOffer";
+            conversationState.attempts = 0; // Reset attempts when moving to new stage
           }
           break;
           
@@ -432,15 +500,58 @@ export async function registerRoutes(app: Express): Promise<Server> {
           if (speechResult.includes("हाँ") || speechResult.includes("yes") || 
               speechResult.includes("ठीक") || speechResult.includes("चलेगा") || digits === "1") {
             nextStage = "finalAgreement";
+            conversationState.attempts = 0; // Reset attempts when moving to new stage
+          } else if (!hasInput) {
+            // No response - retry
+            conversationState.attempts = (conversationState.attempts || 0) + 1;
+            if (conversationState.attempts >= maxAttempts) {
+              nextStage = "timeout";
+            }
           } else {
             // Try one more counter
             conversationState.finalPrice = (conversationState.finalPrice || 9000) + 500;
             nextStage = "finalAgreement";
+            conversationState.attempts = 0; // Reset attempts when moving to new stage
           }
           break;
           
         default:
           nextStage = "ended";
+      }
+      
+      // Handle timeout stage
+      if (nextStage === "timeout") {
+        // Update call status to timeout
+        await storage.updateCall(sessionId, {
+          status: "timeout",
+          completedAt: new Date().toISOString(),
+        });
+        
+        // Reset journey for retry
+        await storage.updateSession(sessionId, {
+          journeyStatus: "selecting-vendor",
+        });
+        
+        // Add timeout message
+        const msg: Message = {
+          id: randomUUID(),
+          role: "assistant",
+          content: "The vendor was not responsive. Would you like to try another vendor?",
+          timestamp: new Date().toISOString(),
+        };
+        await storage.addMessage(sessionId, msg);
+        
+        // Return timeout TwiML
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Google.hi-IN-Standard-A" language="hi-IN">
+    क्षमा करें, मैं आपकी बात सुन नहीं पा रहा हूं। कृपया बाद में कॉल करें। धन्यवाद।
+  </Say>
+  <Hangup/>
+</Response>`;
+        
+        res.type("text/xml");
+        return res.send(twiml);
       }
 
       // Update conversation state
@@ -478,65 +589,104 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.send(twiml);
   });
 
-  // Twilio webhook
-  app.post("/api/calls/webhook/:callId", async (req, res) => {
+  // Twilio webhook - Now includes sessionId for better tracking
+  app.post("/api/calls/webhook/:sessionId/:callId", async (req, res) => {
     try {
+      const { sessionId, callId } = req.params;
       const callStatus = req.body.CallStatus;
-      const duration = req.body.CallDuration;
+      const duration = req.body.CallDuration ? parseInt(req.body.CallDuration) : 0;
+      const answeredBy = req.body.AnsweredBy; // Can be "human", "machine", or null for no answer
 
-      // Find session with this call
-      // In production, use proper session lookup
-      const sessions = (storage as any).sessions;
-      let targetSessionId: string | null = null;
-
-      for (const [sessionId, session] of sessions) {
-        if (session.currentCall?.id === req.params.callId) {
-          targetSessionId = sessionId;
-          break;
-        }
+      // Get the session
+      const session = await storage.getSession(sessionId);
+      if (!session || !session.currentCall) {
+        console.warn(`Session or call not found for webhook: ${sessionId}/${callId}`);
+        return res.sendStatus(200); // Twilio expects 200 even if we can't process
       }
 
-      if (targetSessionId) {
-        const statusMap: Record<string, any> = {
-          "initiated": "initiating",
-          "ringing": "ringing",
-          "in-progress": "in-progress",
-          "completed": "completed",
-          "failed": "failed",
-        };
+      // Map Twilio statuses to our statuses
+      let mappedStatus: any = "failed";
+      let userMessage: string | null = null;
+      let shouldResetJourney = false;
 
-        await storage.updateCall(targetSessionId, {
-          status: statusMap[callStatus] || callStatus,
-          duration: duration ? parseInt(duration) : undefined,
-          completedAt: callStatus === "completed" ? new Date().toISOString() : undefined,
-        });
-
-        // If call completed successfully, simulate negotiated price
-        if (callStatus === "completed") {
-          const negotiatedPrice = Math.floor(Math.random() * 5000) + 8000; // ₹8000-13000
-          await storage.updateCall(targetSessionId, {
-            negotiatedPrice,
-          });
-
-          await storage.updateSession(targetSessionId, {
+      // Handle different call scenarios
+      if (callStatus === "no-answer" || callStatus === "busy") {
+        mappedStatus = "no-answer";
+        userMessage = "The vendor didn't answer the call. Would you like to try another vendor?";
+        shouldResetJourney = true;
+      } else if (callStatus === "failed") {
+        mappedStatus = "failed";
+        userMessage = "The call could not be connected. Would you like to try another vendor?";
+        shouldResetJourney = true;
+      } else if (callStatus === "canceled") {
+        mappedStatus = "hung-up";
+        userMessage = "The call was canceled. Would you like to try another vendor?";
+        shouldResetJourney = true;
+      } else if (callStatus === "completed") {
+        // Check duration to determine if it was a hangup or successful completion
+        if (duration < 10) {
+          // Less than 10 seconds - treat as hangup
+          mappedStatus = "hung-up";
+          userMessage = "The vendor hung up the call. Would you like to try another vendor?";
+          shouldResetJourney = true;
+        } else if (!session.currentCall.negotiatedPrice && duration < 60) {
+          // No negotiated price and less than 60 seconds - incomplete call
+          mappedStatus = "hung-up";
+          userMessage = "The call ended before negotiation could complete. Would you like to try another vendor?";
+          shouldResetJourney = true;
+        } else if (session.currentCall.negotiatedPrice) {
+          // Successful negotiation
+          mappedStatus = "completed";
+          const negotiatedPrice = session.currentCall.negotiatedPrice;
+          userMessage = `Great news! I've negotiated a price of ₹${negotiatedPrice.toLocaleString()} for your Banarasi saree. Ready to proceed with payment?`;
+          await storage.updateSession(sessionId, {
             journeyStatus: "processing-payment",
           });
-
-          // Add message about successful negotiation
-          const msg: Message = {
-            id: randomUUID(),
-            role: "assistant",
-            content: `Great news! I've negotiated a price of ₹${negotiatedPrice.toLocaleString()} for your Banarasi saree. Ready to proceed with payment?`,
-            timestamp: new Date().toISOString(),
-          };
-          await storage.addMessage(targetSessionId, msg);
+        } else {
+          // Call completed but no clear outcome
+          mappedStatus = "completed";
+          userMessage = "The call has ended. Would you like to try another vendor or proceed differently?";
+          shouldResetJourney = true;
         }
+      } else if (callStatus === "ringing") {
+        mappedStatus = "ringing";
+      } else if (callStatus === "in-progress" || callStatus === "answered") {
+        mappedStatus = "in-progress";
+      } else if (callStatus === "initiated" || callStatus === "queued") {
+        mappedStatus = "initiating";
+      }
+
+      // Update call status
+      await storage.updateCall(sessionId, {
+        status: mappedStatus,
+        duration: duration,
+        completedAt: ["completed", "hung-up", "no-answer", "failed", "timeout"].includes(mappedStatus) 
+          ? new Date().toISOString() 
+          : undefined,
+      });
+
+      // Reset journey if needed
+      if (shouldResetJourney) {
+        await storage.updateSession(sessionId, {
+          journeyStatus: "selecting-vendor",
+        });
+      }
+
+      // Add user message if applicable
+      if (userMessage) {
+        const msg: Message = {
+          id: randomUUID(),
+          role: "assistant",
+          content: userMessage,
+          timestamp: new Date().toISOString(),
+        };
+        await storage.addMessage(sessionId, msg);
       }
 
       res.sendStatus(200);
     } catch (error: any) {
       console.error("Webhook error:", error);
-      res.sendStatus(500);
+      res.sendStatus(200); // Always return 200 to Twilio to avoid retries
     }
   });
 
