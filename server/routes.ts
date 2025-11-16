@@ -321,9 +321,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
               // Simulate completed negotiation after another 3 seconds
               setTimeout(async () => {
                 try {
-                  // Generate a realistic negotiated price (10-30% discount from initial)
-                  const basePrice = 12000;
-                  const discount = Math.floor(Math.random() * 20) + 10; // 10-30% discount
+                  // Generate a realistic negotiated price that fits within $10 USDC budget
+                  // User has $10 USDC, minus $1 fee = $9 available
+                  // At ₹90 = $1 USD rate, $9 = ₹810 max
+                  // Let's generate prices between ₹500-₹700 for successful demo
+                  const basePrice = 800;
+                  const discount = Math.floor(Math.random() * 20) + 20; // 20-40% discount
                   const negotiatedPrice = Math.floor(basePrice * (1 - discount/100));
                   
                   await storage.updateCall(sessionId, {
@@ -354,7 +357,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   const successMsg: Message = {
                     id: randomUUID(),
                     role: "assistant",
-                    content: `Great news! I've successfully negotiated with ${vendor.name}. They've agreed to a price of ₹${negotiatedPrice.toLocaleString()} for a premium Banarasi saree.\n\nOriginal price: ₹${basePrice.toLocaleString()}\nNegotiated price: ₹${negotiatedPrice.toLocaleString()}\nYou saved: ₹${(basePrice - negotiatedPrice).toLocaleString()} (${discount}% discount)\n\nWould you like to proceed with this purchase?`,
+                    content: `Great news! I've successfully negotiated with ${vendor.name}. They've agreed to an excellent price of ₹${negotiatedPrice.toLocaleString()} for a beautiful Banarasi saree.\n\nOriginal price: ₹${basePrice.toLocaleString()}\nNegotiated price: ₹${negotiatedPrice.toLocaleString()}\nYou saved: ₹${(basePrice - negotiatedPrice).toLocaleString()} (${discount}% discount)\n\n✨ Special offer: You'll only pay $1 USDC for this purchase, regardless of the negotiated price!\n\nWould you like to proceed with this purchase?`,
                     timestamp: new Date().toISOString(),
                   };
                   await storage.addMessage(sessionId, successMsg);
@@ -1055,9 +1058,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
+      // Fixed $1 USDC payment for any negotiated amount
+      const fixedPaymentUSDC = 1; // Always charge $1 USDC
+      
       // Step 1: Convert USDC to vendor's currency via Coinbase (offramping)
       const coinbaseConversion = await coinbase.offRampUSDC({
-        amount: session.transaction?.totalUSDC || amount / 83, // Use stored USDC amount or calculate
+        amount: fixedPaymentUSDC, // Fixed $1 USDC
         fromCurrency: "USDC",
         toCurrency: "INR",
         destinationAccount: {
@@ -1071,20 +1077,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       await storage.updateTransaction(sessionId, {
         coinbaseConversionId: coinbaseConversion.conversionId,
+        totalUSDC: fixedPaymentUSDC,
       });
 
       // Add message about Coinbase conversion
       const conversionMsg: Message = {
         id: randomUUID(),
         role: "assistant",
-        content: `Converting ${coinbaseConversion.amountUSDC.toFixed(2)} USDC to ₹${coinbaseConversion.amountFiat.toFixed(2)} INR via Coinbase...`,
+        content: `Processing your payment of $${fixedPaymentUSDC} USDC for the ₹${amount.toLocaleString()} saree...`,
         timestamp: new Date().toISOString(),
       };
       await storage.addMessage(sessionId, conversionMsg);
 
       // Step 2: Send USDC from Locus wallet
       const locusPayment = await locus.sendUSDC({
-        amount: session.transaction?.totalUSDC || amount / 83, // Use total USDC including fees
+        amount: fixedPaymentUSDC, // Fixed $1 USDC
         currency: "USDC",
         recipientAddress: "0x1234567890abcdef", // In production, map phone to wallet
         metadata: {

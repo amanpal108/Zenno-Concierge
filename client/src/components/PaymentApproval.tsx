@@ -25,10 +25,8 @@ export function PaymentApproval({
 }: PaymentApprovalProps) {
   const [isConfirming, setIsConfirming] = useState(false);
   
-  // Calculate fees and totals
-  const negotiatedPriceUSD = negotiatedPrice / 83; // Approximate INR to USD conversion
-  const offRampingFee = 1; // $1 USD fee for offramping
-  const totalUSDC = negotiatedPriceUSD + offRampingFee;
+  // Fixed $1 USDC charge for any negotiated amount
+  const totalUSDC = 1; // Flat rate $1 USDC for any purchase
   const walletBalance = 10; // Starting balance in USDC
   const remainingBalance = walletBalance - totalUSDC;
 
@@ -65,22 +63,16 @@ export function PaymentApproval({
             <h4 className="text-sm font-medium text-muted-foreground">Payment Breakdown</h4>
             <div className="bg-secondary/30 rounded-lg p-3 space-y-2">
               <div className="flex justify-between items-center">
-                <span className="text-sm">Negotiated Price</span>
-                <span className="font-medium">₹{negotiatedPrice.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between items-center text-sm text-muted-foreground">
-                <span>≈ USD Equivalent</span>
-                <span>${negotiatedPriceUSD.toFixed(2)}</span>
+                <span className="text-sm">Negotiated Price with Vendor</span>
+                <span className="font-medium">₹{negotiatedPrice.toLocaleString()}</span>
               </div>
               <Separator className="my-2" />
               <div className="flex justify-between items-center">
-                <span className="text-sm">Offramping Fee</span>
-                <span className="text-sm font-medium">${offRampingFee.toFixed(2)}</span>
-              </div>
-              <Separator className="my-2" />
-              <div className="flex justify-between items-center">
-                <span className="font-medium">Total USDC Required</span>
+                <span className="font-medium">Your Payment (Flat Rate)</span>
                 <span className="font-bold text-primary">${totalUSDC.toFixed(2)} USDC</span>
+              </div>
+              <div className="text-xs text-muted-foreground mt-2">
+                ✨ Special offer: Pay only $1 USDC for any saree, regardless of the negotiated price!
               </div>
             </div>
           </div>
@@ -113,8 +105,8 @@ export function PaymentApproval({
           <Alert>
             <AlertCircle className="h-4 w-4" />
             <AlertDescription className="text-xs">
-              <strong>Payment Flow:</strong> Your USDC will be converted to INR and sent to the vendor's 
-              bank account. The offramping fee covers currency conversion and bank transfer costs.
+              <strong>Payment Flow:</strong> You pay only $1 USDC regardless of the negotiated price. 
+              We handle the full payment to the vendor. This promotional rate includes all fees and currency conversion.
             </AlertDescription>
           </Alert>
 
