@@ -425,7 +425,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   <Say voice="Google.hi-IN-Standard-A" language="hi-IN">
     क्षमा करें, कुछ तकनीकी समस्या हुई है। फिर से कोशिश कर रहे हैं।
   </Say>
-  <Redirect method="POST">${baseUrl}/api/calls/twiml/${sessionId}/${callId}/greeting</Redirect>
+  <Redirect method="GET">${baseUrl}/api/calls/twiml/${sessionId}/${callId}/greeting</Redirect>
 </Response>`;
       res.type("text/xml");
       res.send(errorTwiml);
@@ -692,12 +692,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
   <Say voice="Google.hi-IN-Standard-A" language="hi-IN">
     क्षमा करें, कुछ तकनीकी समस्या हुई है। फिर से कोशिश कर रहे हैं।
   </Say>
-  <Redirect method="POST">${baseUrl}/api/calls/twiml/${sessionId}/${callId}/greeting</Redirect>
+  <Redirect method="GET">${baseUrl}/api/calls/twiml/${sessionId}/${callId}/greeting</Redirect>
 </Response>`;
       
       res.type("text/xml");
       res.send(fallbackTwiml);
     }
+  });
+
+  // GET handler for gather endpoint - redirects to TwiML endpoint when Twilio makes GET requests
+  app.get("/api/calls/gather/:sessionId/:callId/:stage", async (req, res) => {
+    const { sessionId, callId, stage } = req.params;
+    const attempt = req.query.attempt || "1";
+    
+    console.log(`[Gather GET] Redirect request received - SessionId: ${sessionId}, CallId: ${callId}, Stage: ${stage}, Attempt: ${attempt}`);
+    
+    // Redirect to the TwiML endpoint which handles GET properly
+    const redirectUrl = `${req.protocol}://${req.get("host")}/api/calls/twiml/${sessionId}/${callId}/${stage}?attempt=${attempt}`;
+    
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Redirect method="GET">${redirectUrl}</Redirect>
+</Response>`;
+    
+    console.log(`[Gather GET] Redirecting to: ${redirectUrl}`);
+    res.type("text/xml");
+    res.send(twiml);
   });
 
   // Legacy TwiML endpoint for backwards compatibility

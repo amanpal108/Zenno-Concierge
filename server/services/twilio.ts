@@ -202,6 +202,6 @@ export function generateConversationalTwiML(
     <Say voice="Google.hi-IN-Standard-A" language="hi-IN">${processedMessage}</Say>
   </Gather>
   <Say voice="Google.hi-IN-Standard-A" language="hi-IN">${currentScript.fallback}</Say>
-  <Redirect method="POST">${redirectUrl}</Redirect>
+  <Redirect method="GET">${redirectUrl}</Redirect>
 </Response>`;
 }
