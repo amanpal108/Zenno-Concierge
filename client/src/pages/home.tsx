@@ -7,6 +7,7 @@ import { ChatInput } from "@/components/ChatInput";
 import { VendorCarousel } from "@/components/VendorCarousel";
 import { CallStatusBanner } from "@/components/CallStatusBanner";
 import { PaymentSummary } from "@/components/PaymentSummary";
+import { PaymentApproval } from "@/components/PaymentApproval";
 import { JourneyTimeline } from "@/components/JourneyTimeline";
 import { Button } from "@/components/ui/button";
 import { Sparkles, Menu } from "lucide-react";
@@ -154,7 +155,40 @@ export default function Home() {
     },
   });
   
-  // Automatically process payment when call completes
+  // Payment approval mutation
+  const approvePaymentMutation = useMutation({
+    mutationFn: async (approved: boolean) => {
+      if (!sessionId) throw new Error("No active session");
+      const response = await apiRequest("POST", "/api/payments/approve", {
+        sessionId,
+        approved,
+      });
+      return await response.json();
+    },
+    onSuccess: (data, approved) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/session", sessionId] });
+      if (approved) {
+        toast({
+          title: "Payment Approved",
+          description: "Processing your payment now...",
+        });
+      } else {
+        toast({
+          title: "Payment Cancelled",
+          description: "You can select another vendor or negotiate again.",
+        });
+      }
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to process payment approval",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Automatically request payment approval when call completes
   useEffect(() => {
     if (
       session?.currentCall?.status === "completed" &&
@@ -162,10 +196,10 @@ export default function Home() {
       session?.selectedVendor &&
       !session?.transaction
     ) {
-      // Auto-initiate payment
-      const processPayment = async () => {
+      // Request payment approval
+      const requestApproval = async () => {
         try {
-          const response = await apiRequest("POST", "/api/payments/process", {
+          const response = await apiRequest("POST", "/api/payments/request-approval", {
             sessionId: session.id,
             amount: session.currentCall!.negotiatedPrice!,
             vendorPhone: session.selectedVendor!.phone,
@@ -173,20 +207,28 @@ export default function Home() {
           await response.json();
           queryClient.invalidateQueries({ queryKey: ["/api/session", sessionId] });
           toast({
-            title: "Payment Processing",
-            description: "Your payment is being processed...",
+            title: "Payment Approval Required",
+            description: "Please review and approve the payment details.",
           });
         } catch (error: any) {
           toast({
             title: "Payment Error",
-            description: error.message || "Failed to process payment",
+            description: error.message || "Failed to request payment approval",
             variant: "destructive",
           });
         }
       };
-      processPayment();
+      requestApproval();
     }
   }, [session?.currentCall?.status, session?.currentCall?.negotiatedPrice, sessionId]);
+
+  const handleApprovePayment = () => {
+    approvePaymentMutation.mutate(true);
+  };
+
+  const handleRejectPayment = () => {
+    approvePaymentMutation.mutate(false);
+  };
   
   const handleSendMessage = (message: string) => {
     sendMessageMutation.mutate(message);
@@ -302,6 +344,22 @@ export default function Home() {
                       vendors={vendors}
                       selectedVendor={selectedVendor}
                       onSelectVendor={handleSelectVendor}
+                    />
+                  </div>
+                )}
+                
+                {/* Show payment approval when transaction is awaiting approval */}
+                {session?.transaction?.status === "awaiting-approval" && 
+                 session?.currentCall?.negotiatedPrice && 
+                 session?.selectedVendor && (
+                  <div className="px-4 sm:px-6 my-4">
+                    <PaymentApproval
+                      negotiatedPrice={session.currentCall.negotiatedPrice}
+                      vendorName={session.selectedVendor.name}
+                      vendorPhone={session.selectedVendor.phone}
+                      onApprove={handleApprovePayment}
+                      onReject={handleRejectPayment}
+                      isProcessing={approvePaymentMutation.isPending}
                     />
                   </div>
                 )}

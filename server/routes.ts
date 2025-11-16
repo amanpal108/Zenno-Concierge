@@ -7,6 +7,8 @@ import {
   vendorSelectRequestSchema,
   callInitiateRequestSchema,
   paymentProcessRequestSchema,
+  paymentApprovalRequestSchema,
+  paymentApprovalResponseSchema,
   ttsRequestSchema,
   type Message,
   type Vendor,
@@ -19,6 +21,7 @@ import * as twilio from "./services/twilio";
 import * as googlePlaces from "./services/google-places";
 import * as locus from "./services/locus";
 import * as stripe from "./services/stripe";
+import * as coinbase from "./services/coinbase";
 
 // Default test phone number for vendors (can be overridden by environment variable)
 const DEFAULT_VENDOR_PHONE = process.env.DEFAULT_VENDOR_PHONE || "+16179466711";
@@ -690,6 +693,150 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Request payment approval
+  app.post("/api/payments/request-approval", async (req, res) => {
+    try {
+      const { sessionId, amount, vendorPhone } = paymentApprovalRequestSchema.parse(req.body);
+
+      const session = await storage.getSession(sessionId);
+      if (!session || !session.selectedVendor) {
+        return res.status(404).json({ error: "Session not found or vendor not selected" });
+      }
+
+      // Calculate USDC costs using Coinbase exchange rate
+      const costCalculation = coinbase.calculateTotalCost(
+        amount, 
+        "USDC", 
+        "INR"
+      );
+
+      // Create transaction with awaiting-approval status
+      const transaction: Transaction = {
+        id: randomUUID(),
+        vendorId: session.selectedVendor.id,
+        amount: amount,
+        currency: "INR",
+        status: "awaiting-approval",
+        exchangeRate: costCalculation.exchangeRate,
+        offRampingFee: costCalculation.fee,
+        totalUSDC: costCalculation.totalUSDC,
+        createdAt: new Date().toISOString(),
+      };
+
+      await storage.setTransaction(sessionId, transaction);
+
+      // Add message asking for approval
+      const msg: Message = {
+        id: randomUUID(),
+        role: "assistant",
+        content: `I've negotiated a price of ₹${amount.toLocaleString()} for your Banarasi saree. This will cost ${costCalculation.totalUSDC.toFixed(2)} USDC (including a $${costCalculation.fee} currency conversion fee). Please approve the payment to proceed.`,
+        timestamp: new Date().toISOString(),
+      };
+      await storage.addMessage(sessionId, msg);
+
+      res.json({ 
+        success: true, 
+        transaction,
+        costBreakdown: {
+          amountINR: amount,
+          amountUSDC: costCalculation.amountUSDC,
+          offRampingFee: costCalculation.fee,
+          totalUSDC: costCalculation.totalUSDC,
+          exchangeRate: costCalculation.exchangeRate
+        }
+      });
+    } catch (error: any) {
+      console.error("Payment approval request error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Approve or reject payment
+  app.post("/api/payments/approve", async (req, res) => {
+    try {
+      const { sessionId, approved } = paymentApprovalResponseSchema.parse(req.body);
+
+      const session = await storage.getSession(sessionId);
+      if (!session || !session.transaction) {
+        return res.status(404).json({ error: "Session or transaction not found" });
+      }
+
+      if (session.transaction.status !== "awaiting-approval") {
+        return res.status(400).json({ error: "Transaction is not awaiting approval" });
+      }
+
+      if (approved) {
+        // Update transaction status to approved
+        await storage.updateTransaction(sessionId, {
+          status: "approved"
+        });
+
+        // Add approval message
+        const msg: Message = {
+          id: randomUUID(),
+          role: "assistant",
+          content: "Payment approved! Processing your transaction now...",
+          timestamp: new Date().toISOString(),
+        };
+        await storage.addMessage(sessionId, msg);
+
+        // Trigger payment processing
+        try {
+          const processResponse = await fetch(`${req.protocol}://${req.get("host")}/api/payments/process`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              sessionId: sessionId,
+              amount: session.transaction.amount,
+              vendorPhone: session.selectedVendor?.phone
+            })
+          });
+
+          if (!processResponse.ok) {
+            throw new Error("Payment processing failed");
+          }
+
+          res.json({ success: true, message: "Payment approved and processing started" });
+        } catch (processError: any) {
+          console.error("Error triggering payment process:", processError);
+          
+          // Update transaction status to failed
+          await storage.updateTransaction(sessionId, {
+            status: "failed"
+          });
+          
+          res.status(500).json({ error: "Payment approved but processing failed" });
+        }
+      } else {
+        // Update transaction status to rejected
+        await storage.updateTransaction(sessionId, {
+          status: "rejected"
+        });
+
+        // Reset journey to vendor selection
+        await storage.updateSession(sessionId, {
+          journeyStatus: "selecting-vendor"
+        });
+
+        // Add rejection message
+        const msg: Message = {
+          id: randomUUID(),
+          role: "assistant",
+          content: "Payment cancelled. Would you like to select a different vendor or negotiate again?",
+          timestamp: new Date().toISOString(),
+        };
+        await storage.addMessage(sessionId, msg);
+
+        res.json({ success: true, message: "Payment rejected" });
+      }
+    } catch (error: any) {
+      console.error("Payment approval error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // Process payment
   app.post("/api/payments/process", async (req, res) => {
     try {
@@ -700,27 +847,67 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "Session not found" });
       }
 
-      // Create transaction record
-      const transaction: Transaction = {
+      // Check if transaction exists and is approved
+      if (!session.transaction) {
+        // Create new transaction if it doesn't exist (backward compatibility)
+        const transaction: Transaction = {
+          id: randomUUID(),
+          vendorId: session.selectedVendor.id,
+          amount,
+          currency: "INR",
+          status: "processing",
+          createdAt: new Date().toISOString(),
+        };
+        await storage.setTransaction(sessionId, transaction);
+      } else if (session.transaction.status !== "approved") {
+        return res.status(400).json({ 
+          error: "Payment must be approved before processing",
+          currentStatus: session.transaction.status 
+        });
+      } else {
+        // Update status to processing
+        await storage.updateTransaction(sessionId, {
+          status: "processing"
+        });
+      }
+
+      // Step 1: Convert USDC to vendor's currency via Coinbase (offramping)
+      const coinbaseConversion = await coinbase.offRampUSDC({
+        amount: session.transaction?.totalUSDC || amount / 83, // Use stored USDC amount or calculate
+        fromCurrency: "USDC",
+        toCurrency: "INR",
+        destinationAccount: {
+          phone: vendorPhone, // Vendor's phone for mobile money transfer
+        },
+        metadata: {
+          sessionId,
+          vendorId: session.selectedVendor.id,
+        },
+      });
+
+      await storage.updateTransaction(sessionId, {
+        coinbaseConversionId: coinbaseConversion.conversionId,
+      });
+
+      // Add message about Coinbase conversion
+      const conversionMsg: Message = {
         id: randomUUID(),
-        vendorId: session.selectedVendor.id,
-        amount,
-        currency: "USDC",
-        status: "processing",
-        createdAt: new Date().toISOString(),
+        role: "assistant",
+        content: `Converting ${coinbaseConversion.amountUSDC.toFixed(2)} USDC to ₹${coinbaseConversion.amountFiat.toFixed(2)} INR via Coinbase...`,
+        timestamp: new Date().toISOString(),
       };
+      await storage.addMessage(sessionId, conversionMsg);
 
-      await storage.setTransaction(sessionId, transaction);
-
-      // Process Locus payment
+      // Step 2: Send USDC from Locus wallet
       const locusPayment = await locus.sendUSDC({
-        amount,
+        amount: session.transaction?.totalUSDC || amount / 83, // Use total USDC including fees
         currency: "USDC",
         recipientAddress: "0x1234567890abcdef", // In production, map phone to wallet
         metadata: {
           sessionId,
           vendorId: session.selectedVendor.id,
           vendorPhone,
+          coinbaseConversionId: coinbaseConversion.conversionId,
         },
       });
 
@@ -728,14 +915,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         locusTransactionHash: locusPayment.transactionHash,
       });
 
-      // Process Stripe payout
+      // Step 3: Create Stripe payout to vendor
       const stripePayout = await stripe.createPayout({
-        amount,
+        amount: coinbaseConversion.amountFiat, // Use the converted INR amount
         currency: "INR",
         destination: vendorPhone,
         metadata: {
           sessionId,
           vendorId: session.selectedVendor.id,
+          coinbaseConversionId: coinbaseConversion.conversionId,
+          locusTransactionHash: locusPayment.transactionHash,
         },
       });
 
@@ -749,16 +938,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
         journeyStatus: "completed",
       });
 
-      // Add completion message
+      // Add completion message with full payment flow details
       const msg: Message = {
         id: randomUUID(),
         role: "assistant",
-        content: `Payment successful! Your transaction has been completed. The vendor will contact you shortly to arrange delivery.`,
+        content: `Payment successful! 
+✅ Converted ${coinbaseConversion.amountUSDC.toFixed(2)} USDC to ₹${coinbaseConversion.amountFiat.toFixed(2)} INR
+✅ Offramping fee: $${coinbaseConversion.fee.toFixed(2)}
+✅ Funds sent to vendor via Stripe
+✅ Transaction hash: ${locusPayment.transactionHash.substring(0, 10)}...
+
+The vendor will contact you shortly to arrange delivery.`,
         timestamp: new Date().toISOString(),
       };
       await storage.addMessage(sessionId, msg);
 
-      res.json({ success: true, transaction });
+      res.json({ 
+        success: true, 
+        transaction: session.transaction,
+        paymentDetails: {
+          coinbaseConversionId: coinbaseConversion.conversionId,
+          locusTransactionHash: locusPayment.transactionHash,
+          stripePayoutId: stripePayout.payoutId,
+          amountUSDC: coinbaseConversion.amountUSDC,
+          amountINR: coinbaseConversion.amountFiat,
+          offRampingFee: coinbaseConversion.fee
+        }
+      });
     } catch (error: any) {
       console.error("Payment error:", error);
 

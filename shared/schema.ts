@@ -81,9 +81,12 @@ export type Call = z.infer<typeof callSchema>;
 // Transaction Status Schema
 export const transactionStatusSchema = z.enum([
   "pending",
+  "awaiting-approval",
+  "approved",
   "processing",
   "completed",
   "failed",
+  "rejected",
 ]);
 
 export type TransactionStatus = z.infer<typeof transactionStatusSchema>;
@@ -97,6 +100,10 @@ export const transactionSchema = z.object({
   status: transactionStatusSchema,
   locusTransactionHash: z.string().optional(),
   stripePayoutId: z.string().optional(),
+  coinbaseConversionId: z.string().optional(),
+  exchangeRate: z.number().optional(),
+  offRampingFee: z.number().optional(),
+  totalUSDC: z.number().optional(),
   createdAt: z.string(),
   completedAt: z.string().optional(),
 });
@@ -182,6 +189,23 @@ export const paymentProcessRequestSchema = z.object({
 });
 
 export type PaymentProcessRequest = z.infer<typeof paymentProcessRequestSchema>;
+
+// Payment Approval Request
+export const paymentApprovalRequestSchema = z.object({
+  sessionId: z.string(),
+  amount: z.number(),
+  vendorPhone: z.string(),
+});
+
+export type PaymentApprovalRequest = z.infer<typeof paymentApprovalRequestSchema>;
+
+// Payment Approval Response
+export const paymentApprovalResponseSchema = z.object({
+  sessionId: z.string(),
+  approved: z.boolean(),
+});
+
+export type PaymentApprovalResponse = z.infer<typeof paymentApprovalResponseSchema>;
 
 // TTS Request
 export const ttsRequestSchema = z.object({
