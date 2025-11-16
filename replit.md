@@ -36,9 +36,10 @@ Preferred communication style: Simple, everyday language.
 
 **Layout Structure:**
 - Responsive two-column layout (sidebar + main chat area on desktop)
-- Fixed-width sidebar (320px) for vendor lists and journey timeline
+- Fixed-width sidebar (320px) for journey timeline and payment summary
 - Main content area with max-width constraint (4xl) for optimal readability
 - Mobile: single column with collapsible drawer sidebar
+- Vendor selection integrated as horizontal carousel within chat interface
 
 ### Backend Architecture
 
