@@ -336,16 +336,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   // Create transaction awaiting approval
                   const transaction: Transaction = {
                     id: randomUUID(),
-                    sessionId,
                     vendorId: vendor.id,
                     amount: negotiatedPrice,
                     currency: "INR",
                     status: "awaiting-approval",
                     createdAt: new Date().toISOString(),
-                    updatedAt: new Date().toISOString(),
+                    completedAt: undefined,
                   };
                   
-                  await storage.createTransaction(transaction);
+                  // Use setTransaction which takes sessionId as a parameter
+                  await storage.setTransaction(sessionId, transaction);
                   await storage.updateSession(sessionId, { 
                     transaction,
                     journeyStatus: "processing-payment" 

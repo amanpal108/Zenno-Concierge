@@ -31,18 +31,21 @@ export function PaymentSummary({ transaction, vendor }: PaymentSummaryProps) {
     processing: { icon: Clock, label: "Processing", color: "bg-blue-500" },
     completed: { icon: CheckCircle2, label: "Completed", color: "bg-green-600" },
     failed: { icon: XCircle, label: "Failed", color: "bg-red-500" },
+    "awaiting-approval": { icon: Clock, label: "Awaiting Approval", color: "bg-yellow-500" },
   };
   
-  const StatusIcon = statusConfig[transaction.status].icon;
+  const status = transaction?.status || "pending";
+  const currentConfig = statusConfig[status as keyof typeof statusConfig] || statusConfig.pending;
+  const StatusIcon = currentConfig.icon;
   
   return (
     <Card className="overflow-hidden" data-testid="payment-summary">
       <CardHeader className="bg-muted/50">
         <div className="flex items-center justify-between">
           <CardTitle className="text-2xl">Payment Summary</CardTitle>
-          <Badge className={statusConfig[transaction.status].color}>
+          <Badge className={currentConfig.color}>
             <StatusIcon className="h-3 w-3 mr-1" />
-            {statusConfig[transaction.status].label}
+            {currentConfig.label}
           </Badge>
         </div>
       </CardHeader>

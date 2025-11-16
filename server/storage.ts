@@ -19,6 +19,7 @@ export interface IStorage {
   updateCall(sessionId: string, updates: Partial<Call>): Promise<void>;
   
   // Transaction operations
+  createTransaction(transaction: Transaction): Promise<void>;
   setTransaction(sessionId: string, transaction: Transaction): Promise<void>;
   updateTransaction(sessionId: string, updates: Partial<Transaction>): Promise<void>;
 }
@@ -95,6 +96,19 @@ export class MemStorage implements IStorage {
       throw new Error("Call not found");
     }
     session.currentCall = { ...session.currentCall, ...updates };
+  }
+
+  async createTransaction(transaction: Transaction): Promise<void> {
+    // Find the session that has a vendor matching this transaction's vendorId
+    // This is a workaround since Transaction doesn't have sessionId
+    const sessions = Array.from(this.sessions.values());
+    for (const session of sessions) {
+      if (session.selectedVendor?.id === transaction.vendorId) {
+        session.transaction = transaction;
+        return;
+      }
+    }
+    throw new Error("Session not found for transaction");
   }
 
   async setTransaction(sessionId: string, transaction: Transaction): Promise<void> {
