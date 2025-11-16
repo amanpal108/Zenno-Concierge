@@ -18,7 +18,7 @@ const MOCK_VENDORS = [
     placeId: "mock-1",
     name: "Raj Silk House",
     address: "Godowlia, Varanasi, Uttar Pradesh 221001",
-    phone: "+91-9876543210",
+    phone: "+16179466711", // Test phone number
     rating: 4.5,
     location: { lat: 25.3176, lng: 82.9739 },
   },
@@ -26,7 +26,7 @@ const MOCK_VENDORS = [
     placeId: "mock-2",
     name: "Banaras Silk Emporium",
     address: "Lanka, Varanasi, Uttar Pradesh 221005",
-    phone: "+91-9876543211",
+    phone: "+16179466711", // Test phone number
     rating: 4.3,
     location: { lat: 25.2820, lng: 82.9944 },
   },
@@ -34,7 +34,7 @@ const MOCK_VENDORS = [
     placeId: "mock-3",
     name: "Heritage Saree Collection",
     address: "Chowk, Varanasi, Uttar Pradesh 221001",
-    phone: "+91-9876543212",
+    phone: "+16179466711", // Test phone number
     rating: 4.7,
     location: { lat: 25.3096, lng: 82.9790 },
   },
